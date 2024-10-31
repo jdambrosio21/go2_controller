@@ -179,6 +179,7 @@ class GaitScheduler:
                     else:
                         # Set touchdown flag to 0
                         self.gait_data.touchdown_scheduled[foot] = 0
+
                 else:
                     # Foot is not scheduled to be in contact (in swing)
                     self.gait_data.contact_state_scheduled[foot] = 0
@@ -202,7 +203,189 @@ class GaitScheduler:
 
                     # First contact signifies scheduled touchdown
                     if self.gait_data.contact_state_prev[foot] == 1:
-                        # Set liftoff
+                        # Set liftoff flag to 1
+                        self.gait_data.liftoff_scheduled[foot] = 1
+                    else:
+                        # Set liftoff flag to 0
+                        self.gait_data.liftoff_scheduled[foot] = 0
+            else:
+                # Leg is disabled
+                self.gait_data.phase_varible[foot] = 0.0
+                self.gait_data.contact_state_scheduled[foot] = 0
+
+
+    def create_gait(self):
+        """Create new gait from parameters, matching C++ implementation"""
+        print(f"[GAIT] Transitioning gait from {self.gait_data.gait_name} to ", end="")
+        
+        # Get parameters for next gait
+        if self.gait_data._next_gait == GaitType.STAND:
+            self.gait_data.gait_name = "STAND"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 10.0
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 1.0
+            self.gait_data.phase_offset = np.array([0.5, 0.5, 0.5, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 0
+            
+        elif self.gait_data._next_gait == GaitType.STAND_CYCLE:
+            self.gait_data.gait_name = "STAND_CYCLE"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 1.0
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 1.0
+            self.gait_data.phase_offset = np.array([0.5, 0.5, 0.5, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 0
+            
+        elif self.gait_data._next_gait == GaitType.STATIC_WALK:
+            self.gait_data.gait_name = "STATIC_WALK"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 1.25
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.8
+            self.gait_data.phase_offset = np.array([0.25, 0.0, 0.75, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.AMBLE:
+            self.gait_data.gait_name = "AMBLE"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.5
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.6250
+            self.gait_data.phase_offset = np.array([0.0, 0.5, 0.25, 0.75])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.TROT_WALK:
+            self.gait_data.gait_name = "TROT_WALK"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.5
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.6
+            self.gait_data.phase_offset = np.array([0.0, 0.5, 0.5, 0.0])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.TROT:
+            self.gait_data.gait_name = "TROT" 
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.5
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.5
+            self.gait_data.phase_offset = np.array([0.0, 0.5, 0.5, 0.0])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.TROT_RUN:
+            self.gait_data.gait_name = "TROT_RUN"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.4
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.4
+            self.gait_data.phase_offset = np.array([0.0, 0.5, 0.5, 0.0])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.PACE:
+            self.gait_data.gait_name = "PACE"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.35
+            self.gait_data.initial_phase = 0.25
+            self.gait_data.switching_phase_nominal = 0.5
+            self.gait_data.phase_offset = np.array([0.0, 0.5, 0.0, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.BOUND:
+            self.gait_data.gait_name = "BOUND"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.4
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.4
+            self.gait_data.phase_offset = np.array([0.0, 0.0, 0.5, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.ROTARY_GALLOP:
+            self.gait_data.gait_name = "ROTARY_GALLOP"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.4
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.2
+            self.gait_data.phase_offset = np.array([0.0, 0.8571, 0.3571, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.TRAVERSE_GALLOP:
+            self.gait_data.gait_name = "TRAVERSE_GALLOP"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.5
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.2
+            self.gait_data.phase_offset = np.array([0.0, 0.8571, 0.3571, 0.5])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.PRONK:
+            self.gait_data.gait_name = "PRONK"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            self.gait_data.period_time_nominal = 0.5
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.5
+            self.gait_data.phase_offset = np.array([0.0, 0.0, 0.0, 0.0])
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.THREE_FOOT:
+            self.gait_data.gait_name = "THREE_FOOT"
+            self.gait_data.gait_enabled = np.array([0, 1, 1, 1])  # Front left disabled
+            self.gait_data.period_time_nominal = 0.4
+            self.gait_data.initial_phase = 0.0
+            self.gait_data.switching_phase_nominal = 0.666
+            self.gait_data.phase_offset = np.array([0.0, 0.666, 0.0, 0.333])
+            self.gait_data.phase_scale = np.array([0.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 1
+            
+        elif self.gait_data._next_gait == GaitType.TRANSITION_TO_STAND:
+            self.gait_data.gait_name = "TRANSITION_TO_STAND"
+            self.gait_data.gait_enabled = np.array([1, 1, 1, 1])
+            
+            # Special transition case - uses current gait timing
+            old_period_time = self.gait_data.period_time_nominal
+            self.gait_data.period_time_nominal = 3 * old_period_time
+            self.gait_data.initial_phase = 0.0
+            
+            # Compute transition phases
+            self.gait_data.switching_phase_nominal = (
+                (self.gait_data.period_time_nominal + old_period_time * 
+                (self.gait_data.switching_phase_nominal - 1)) / 
+                self.gait_data.period_time_nominal
+            )
+            
+            # Compute transition offsets for each leg
+            for i in range(4):
+                self.gait_data.phase_offset[i] = (
+                    (self.gait_data.period_time_nominal + old_period_time * 
+                    (self.gait_data.phase_variable[i] - 1)) / 
+                    self.gait_data.period_time_nominal
+                )
+                
+            self.gait_data.phase_scale = np.array([1.0, 1.0, 1.0, 1.0])
+            self.gait_data.overrideable = 0
+            
+        print(self.gait_data.gait_name)
+        
+        # Update gait
+        self.gait_data._current_gait = self.gait_data._next_gait
+        
+        # Calculate auxiliary data
+        self.calc_auxiliary_gait_data()
+
+
+
 
 
 
