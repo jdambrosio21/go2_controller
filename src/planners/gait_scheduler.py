@@ -384,17 +384,44 @@ class GaitScheduler:
         # Calculate auxiliary data
         self.calc_auxiliary_gait_data()
 
+    def calc_auxiliary_gait_data(self):
+        """Calculate auxilary gait data from parameters"""
+        # Set the gait parameters for each foot
+        for foot in range(4):
+            if self.gait_data.gait_enabled[foot] == 1:
+                # The scaled period time for each foot
+                self.gait_data.period_time[foot] = (
+                    self.gait_data.period_time_nominal / self.gait_data.phase_scale[foot]
+                    )
+                
+            # Phase at which to switch the foot from stance to swing
+            self.gait_data.switching_phase[foot] = self.gait_data.switching_phase_nominal
 
+            # Init phase variables according to offset
+            self.gait_data.phase_varible[foot] = (
+                self.gait_data.initial_phase[foot + self.gait_data.phase_offset[foot]]
+            )
 
+            # Find the total stance time over the gait cycle
+            self.gait_data.time_stance[foot] = (self.gait_data.period_time[foot] * self.gait_data.switching_phase[foot]
+            )
 
-
-
-
+            # Find the total swing time over the gait cycle
+            self.gait_data.time_swing[foot] = (
+                self.gait_data.period_time[foot] * (1.0 - self.gait_data.switching_phase[foot])
+            )
         
-# Track Phases
+        else:
+            # Leg is disabled
+            self.gait_data.period_time[foot] = 0.0
+            self.gait_data.switching_phase[foot] = 0.0
+            self.gait_data.phase_variable[foot] = 0.0
+            self.gait_data.time_stance[foot] = 0.0 # Foot is never in stance
+            self.gait_data.time_swing[foot] = float('inf') # Foot is always in swing
 
-# Implement Gait Transition Logic
-
-#
-
-# Output phases status and swing-stance timing for each leg
+    def modify_gait(self):
+        """Modify gait parameters"""
+        # For now, just checking if we need to transition
+        # May need to implement gait modification logic
+        if self.gait_data._current_gait != self.gait_data._next_gait:
+            self.create_gait()
