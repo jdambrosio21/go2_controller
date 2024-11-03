@@ -48,7 +48,7 @@ class GaitData:
 
     # Phase based descriptors (one per foot)
     switching_phase: np.ndarray = np.zeros(4) # Phase to swtich to swing
-    phase_varible: np.ndarray = np.zeros(4) # Current gait phase for each foot
+    phase_variable: np.ndarray = np.zeros(4) # Current gait phase for each foot
     phase_offset: np.ndarray = np.zeros(4) # Nominal gait phase offsets
     phase_scale: np.ndarray = np.zeros(4) # phase scale relative to variable
     phase_stance: np.ndarray = np.zeros(4)  # stance subphase
@@ -147,16 +147,16 @@ class GaitScheduler:
                     dphase = GaitData.phase_scale[foot] * (self.dt / GaitData.period_time_nominal)
 
                 # Find each foots current phase
-                self.gait_data.phase_varible[foot] = (self.gait_data.phase_varible[foot] + dphase) % 1.0
+                self.gait_data.phase_variable[foot] = (self.gait_data.phase_variable[foot] + dphase) % 1.0
 
                 # Check the current contact state
-                if self.gait_data.phase_varible[foot] <= self.gait_data.switching_phase[foot]:
+                if self.gait_data.phase_variable[foot] <= self.gait_data.switching_phase[foot]:
                     # Foot is scheduled to be in stance
                     self.gait_data.contact_state_scheduled[foot] = 1
 
                     # Calculate stance subphase
                     self.gait_data.phase_stance[foot] = (
-                        self.gait_data.phase_varible[foot] /self.gait_data.switching_phase[foot]
+                        self.gait_data.phase_variable[foot] /self.gait_data.switching_phase[foot]
                     )
 
                     # Swing phase has not started since foot is in stance
@@ -165,7 +165,7 @@ class GaitScheduler:
                     # Calculate remaining time in stance
                     self.gait_data.time_stance_remaining[foot] = (
                         self.gait_data.period_time[foot] * 
-                        (self.gait_data.switching_phase[foot] - self.gait_data.phase_varible[foot])
+                        (self.gait_data.switching_phase[foot] - self.gait_data.phase_variable[foot])
                     )
 
                     # Foot is in stance, no swing time remaining
@@ -198,7 +198,7 @@ class GaitScheduler:
 
                     # Calculate remaining time in swing
                     self.gait_data.time_swing_remaining[foot] = (
-                        self.gait_data.period_time[foot] * (1.0 - self.gait_data.phase_varible[foot])
+                        self.gait_data.period_time[foot] * (1.0 - self.gait_data.phase_variable[foot])
                     )
 
                     # First contact signifies scheduled touchdown
@@ -210,7 +210,7 @@ class GaitScheduler:
                         self.gait_data.liftoff_scheduled[foot] = 0
             else:
                 # Leg is disabled
-                self.gait_data.phase_varible[foot] = 0.0
+                self.gait_data.phase_variable[foot] = 0.0
                 self.gait_data.contact_state_scheduled[foot] = 0
 
 
@@ -398,10 +398,10 @@ class GaitScheduler:
             self.gait_data.switching_phase[foot] = self.gait_data.switching_phase_nominal
 
             # Init phase variables according to offset
-            self.gait_data.phase_varible[foot] = (
-                self.gait_data.initial_phase[foot + self.gait_data.phase_offset[foot]]
-            )
-
+            self.gait_data.phase_variable[foot] = (
+                self.gait_data.initial_phase + 
+                self.gait_data.phase_offset[foot])
+            
             # Find the total stance time over the gait cycle
             self.gait_data.time_stance[foot] = (self.gait_data.period_time[foot] * self.gait_data.switching_phase[foot]
             )
