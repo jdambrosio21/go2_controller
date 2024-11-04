@@ -51,4 +51,49 @@ class ConvexMPC():
         # Parameters that will be set at each solving instance
         self.x0 = self.opti.parameter(self.n_states)
         self.x_ref = self.opti.parameter(self.n_states, self.params.horizon_steps + 1)
+        self.contact_sched = self.opti.parameter(4, self.params.horizon_steps) # 4 feet
+        self.foot_positions = []    # To hold foot position params
+
+        for k in range(self.params.horizon_steps):
+            foot_pos_k = []
+            for foot in range(4): # 4 Feet
+                pos = self.opti.parameter(3) # xyz
+                foot_pos_k.append(pos)
+            self.foot_positions.append(foot_pos_k)
         
+        self.setup_cost()
+
+        self.add_constraints()
+    
+    def setup_cost(self):
+        """Method to setup QP cost"""
+
+        # Initialize Cost function
+        cost = 0
+
+        Q = ca.diag([
+            self.params.w_position, self.params.w_position, self.params.w_position,         # Position
+            self.params.w_orientation, self.params.w_orientation, self.params.w_orientation, # Orientation
+            self.params.w_velocity, self.params.w_velocity, self.params.w_velocity,         # Linear velocity
+            self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
+            0  # gravity state
+        ])
+        
+        R = self.params.w_force * ca.diag(self.n_inputs)
+        
+        # Add costs for the entire horizon
+        for k in range(self.params.horizon_steps):
+            # State error cost
+            cost += (self.X[:, k] - self.x_ref[:, k]).T @ Q @ (self.X[:, k] - self.x_ref[:, k])
+
+            # Control cost
+            cost += self.U[:, k].T @ R @ self.U[:, k]
+        
+ 
+    def add_constraints(self):
+        """Method to add constraints to the MPC QP"""
+        self.add_inital_state_constraint()
+
+        self.add_friction_cone_constraints()
+
+        self.add_dynamics_constraints
