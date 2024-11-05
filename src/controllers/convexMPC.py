@@ -61,9 +61,10 @@ class ConvexMPC():
                 foot_pos_k.append(pos)
             self.foot_positions.append(foot_pos_k)
         
+        self.add_constraints()
+        
         self.setup_cost()
 
-        self.add_constraints()
     
     def setup_cost(self):
         """Method to setup QP cost"""
@@ -88,6 +89,8 @@ class ConvexMPC():
 
             # Control cost
             cost += self.U[:, k].T @ R @ self.U[:, k]
+        
+        self.opti.minimize(cost)
         
  
     def add_constraints(self):
@@ -174,3 +177,51 @@ class ConvexMPC():
                 # Friction cone constraints
                 self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[0], self.params.mu * f_i[2])
                 self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[1], self.params.mu * f_i[2])
+
+    def solve(self,
+              x0: NDArray,
+              x_ref: NDArray,
+              contact_schedule: NDArray,
+              foot_positions: List[List[NDArray]]) -> Optional[NDArray]:
+        """Solve the MPC Problem
+
+        Args:
+            x0: Initial state [13]
+            x_ref: Reference trajectory [13 x horizon_steps + 1]
+            contact_schedule: Contact flags [4 x horizon steps]
+            foot_positions: Foot positions for horizon [horizon_steps x 4 x 3]
+        
+        Returns:
+            Optimal forces for first time step [12] or None if failed
+        """
+
+        # Setup solver
+        opts = {
+            'print_time': False,
+            'verbose': False,
+            'qpsol': 'qpoases',
+            'qpsol_options': {
+                'printlevel': 'none'
+            }
+        }
+
+        self.opti.solver('opoases', opts)
+
+        # Set parameters
+        self.opti.set_value(self.x0, x0)
+        self.opti.set_value(self.x_ref, x_ref)
+        self.opti.set_value(self.contact_sched, contact_schedule)
+
+        # Set foot positions
+        for k in range(self.params.horizon_steps):
+            for i in range(4):
+                self.opti.set_value(self.foot_positions[k][i], foot_positions[k][i])
+        
+        # Solve
+        try:
+            sol = self.opti.solve()
+            forces = sol.value(self.U)[:, 0]
+            return forces
+        except:
+            print("QP solve failed")
+            return None
