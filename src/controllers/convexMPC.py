@@ -94,6 +94,83 @@ class ConvexMPC():
         """Method to add constraints to the MPC QP"""
         self.add_inital_state_constraint()
 
-        self.add_friction_cone_constraints()
+        self.add_dynamics_constraints()
 
-        self.add_dynamics_constraints
+        self.add_contact_constraints()
+
+    def add_inital_state_constraint(self):
+        """Adds the constraint that the first state decision variable equals the robot's starting state"""
+        self.opti.subject_to(self.X[:, 0] == self.x0)
+    
+    def add_dynamics_constraints(self):
+        """Adds dynamics constraints to ensure the next state decision variable matches the simplified dynamics"""
+
+        # over the entire horizon
+        for k in range(self.params.horizon_steps):
+            # Get current state elements
+            pos = self.X[0:3, k]
+            ori = self.X[3:6, k]
+            lin_vel = self.X[6:9, k]
+            ang_vel = self.X[9:12, k]
+            g = self.X[12, k]
+
+            # Dynamics constraints (equation 16 from paper)
+            # Only use yaw rotation (small angle approximation for roll/pitch)
+            yaw = ori[2]
+            R_yaw = ca.vertcat(
+                ca.horzcat(ca.cos(yaw), -ca.sin(yaw), 0),
+                ca.horzcat(ca.sin(yaw), ca.cos(yaw), 0),
+                ca.horzcat(0, 0, 1)
+            )
+
+            # Position dynamics
+            pos_next = pos + self.params.dt * lin_vel
+
+            # Simplified orientation dynamics
+            ori_next = ori + self.params.dt + ang_vel
+
+            # Velocity dynamics
+
+            # Extract forces for each foot
+            forces = []
+            for i in range(4):
+                f_i = self.U[i * 3:(i + 1) * 3, k]
+                forces.append(f_i)
+
+            total_force = sum(forces)
+            lin_vel_next = lin_vel + self.params.dt * (
+                total_force/self.params.mass - 
+                ca.vertcat(0, 0, self.params.gravity)
+            )
+
+            # Simplified angular velocity dynamics
+            # Calc torques from forces and foot positions
+            total_torque = ca.DM.zeros(3)
+            for i, (f, p) in enumerate(zip(forces, self.foot_positions[k])):
+                    if self.contact_sched[i, k]:
+                        total_torque += ca.cross(p, f)
+            
+            # Get inertia matrix from pinocchio (implement)
+            I_body = ca.diag([0.3, 0.3, 0.3])
+            ang_vel_next = ang_vel + self.params.dt * ca.solve(I_body, total_torque)
+
+            # Combine next state
+            X_next = ca.vertcat(pos_next, ori_next, lin_vel_next, ang_vel_next, g)
+            self.opti.subject_to(self.X[:, k + 1] == X_next)
+    
+    def add_contact_constraints(self):
+        """Adds constraints on forces for contact feet and friction cone"""
+        
+        for k in range(self.params.horizon_steps):
+            # Extract forces 
+            forces = []
+            for i in range(4): # For each foot
+                f_i = self.U[i * 3:(i + 1) * 3, k]
+                forces.append(f_i)
+
+                # Add force constraints for each foot in contact
+                self.opti.bounded(self.params.f_min, self.contact_sched[i, k] * f_i[2], self.params.f_max)
+
+                # Friction cone constraints
+                self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[0], self.params.mu * f_i[2])
+                self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[1], self.params.mu * f_i[2])
