@@ -1,7 +1,7 @@
 import numpy as np
 from typing import List, Optional
 from dataclasses import dataclass
-from gait_scheduler import GaitScheduler
+from planners.gait_scheduler import GaitScheduler
 from numpy.typing import NDArray
 
 @dataclass

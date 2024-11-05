@@ -155,9 +155,10 @@ class GaitScheduler:
                     self.gait_data.contact_state_scheduled[foot] = 1
 
                     # Calculate stance subphase
-                    self.gait_data.phase_stance[foot] = (
-                        self.gait_data.phase_variable[foot] /self.gait_data.switching_phase[foot]
-                    )
+                    if self.gait_data.switching_phase[foot] != 0:
+                        self.gait_data.phase_stance[foot] = self.gait_data.phase_variable[foot] / self.gait_data.switching_phase[foot]
+                    else:
+                        self.gait_data.phase_stance[foot] = 0.0
 
                     # Swing phase has not started since foot is in stance
                     self.gait_data.phase_swing[foot] = 0.0

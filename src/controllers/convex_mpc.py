@@ -38,7 +38,7 @@ class ConvexMPC():
         """Setup the QP using CasADi"""
 
         # Create solver instance
-        self.opti = ca.Opti('Conic') # Convex QP
+        self.opti = ca.Opti('conic') # Convex QP
 
         # Decision variables
         self.n_states = 13 # [pos(3), ori(3), lin_vel(3), ang_vel(3), gravity(1)]
@@ -52,12 +52,13 @@ class ConvexMPC():
         self.x0 = self.opti.parameter(self.n_states)
         self.x_ref = self.opti.parameter(self.n_states, self.params.horizon_steps + 1)
         self.contact_sched = self.opti.parameter(4, self.params.horizon_steps) # 4 feet
-        self.foot_positions = []    # To hold foot position params
 
+        # Setup foot position parameters for each timestep and foot
+        self.foot_positions = []
         for k in range(self.params.horizon_steps):
             foot_pos_k = []
-            for foot in range(4): # 4 Feet
-                pos = self.opti.parameter(3) # xyz
+            for i in range(4):  # 4 feet, not 3
+                pos = self.opti.parameter(3)  # xyz position
                 foot_pos_k.append(pos)
             self.foot_positions.append(foot_pos_k)
         
@@ -150,8 +151,7 @@ class ConvexMPC():
             # Calc torques from forces and foot positions
             total_torque = ca.DM.zeros(3)
             for i, (f, p) in enumerate(zip(forces, self.foot_positions[k])):
-                    if self.contact_sched[i, k]:
-                        total_torque += ca.cross(p, f)
+                    total_torque += self.contact_sched[i, k] * ca.cross(p, f)
             
             # Get inertia matrix from pinocchio (implement)
             I_body = ca.diag([0.3, 0.3, 0.3])
@@ -205,7 +205,11 @@ class ConvexMPC():
             }
         }
 
-        self.opti.solver('opoases', opts)
+        self.opti.solver('qpoases', opts)
+
+        x0 = ca.DM(x0.tolist())
+        x_ref = ca.DM(x_ref.tolist())
+        contact_schedule = ca.DM(contact_schedule.tolist())
 
         # Set parameters
         self.opti.set_value(self.x0, x0)
@@ -214,7 +218,7 @@ class ConvexMPC():
 
         # Set foot positions
         for k in range(self.params.horizon_steps):
-            for i in range(4):
+            for i in range(3):
                 self.opti.set_value(self.foot_positions[k][i], foot_positions[k][i])
         
         # Solve
