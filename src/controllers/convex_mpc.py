@@ -154,7 +154,7 @@ class ConvexMPC():
             for i, (f, p) in enumerate(zip(forces, self.foot_positions[k])):
                     total_torque += self.contact_sched[i, k] * ca.cross(p, f)
             
-            ang_vel_next = ang_vel + self.params.dt * ca.solve(I_body, total_torque)
+            ang_vel_next = ang_vel + self.params.dt * ca.solve(self.params.I_body, total_torque)
 
             # Combine next state
             X_next = ca.vertcat(pos_next, ori_next, lin_vel_next, ang_vel_next, g)
