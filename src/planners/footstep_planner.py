@@ -1,179 +1,85 @@
+import math
 import numpy as np
-from typing import List, Optional
-from dataclasses import dataclass
-from planners.gait_scheduler import GaitScheduler
-from numpy.typing import NDArray
-
-@dataclass
-class FootstepPlan:
-    """Class for keeping track of a single footstep plan"""
-    position: NDArray    # Desired foot position in world frame
-    start_time: float       # When to start moving foot
-    contact_time: float     # When foot should touch down
-    lift_time: float        # When foot should lift off
-
+from gait_scheduler import GaitScheduler
+from quadruped import Quadruped
 
 class FootstepPlanner:
-    def __init__(self, 
-                 foot_radius: float = 0.2, 
-                 default_height: float = -0.3):
-        """Initialize footstep planner
+    def __init__(self, k_raibert = 0.03):
+      self.n_legs = 4
+      self.k_raibert = k_raibert
+      self.next_footholds = np.zeros((4, 3))
+      self.quadruped = Quadruped()
 
-        Args:
-            foot_radius: Vector from CoM to foot in XY plane
-            default_height: Default foot Z-height in stance
+    def plan_footsteps(self, 
+                       com_state: tuple[np.ndarray, np.ndarray, np.ndarray], 
+                       desired_vel: np.ndarray, 
+                       robot_model,
+                       q_current: np.ndarray, 
+                       gait_scheduler: GaitScheduler) -> np.ndarray:
         """
+        Plan footsteps using Raibert Heuristic
 
-        # Default stance parameters
-        self.default_height = default_height
+        Params:
+            com_state: Current CoM Pos, Vel, and Yaw
+            desired_vel: Desired CoM Velocity from the reference trajectory
+            robot_model: Pinocchio robot model
+            q_current: current robot configuration
+            gait_scheduler: Gait Scheduler to define gait info
+        
+        Returns: 
+            next_footholds: Next foot placements based on Raibert Heuristic in world frame
+        """
+        # Get stance time for Planning
+        stance_duration = gait_scheduler.get_stance_duration()
 
-        # Default foot positions in robot frame (should probably use pinocchio for this)
-        self.default_stance = np.array([
-            [foot_radius, -foot_radius, default_height], #FL
-            [foot_radius, foot_radius, default_height], #FR
-            [-foot_radius, -foot_radius, default_height], #BL
-            [-foot_radius, foot_radius, default_height], #BR
-        ])
+        # Get which feer are in stance or swing
+        contact_state = gait_scheduler.get_current_contact_state()
 
-    def plan_footsteps(self,
-                       gait_scheduler: GaitScheduler,
-                       current_pos: NDArray,
-                       current_yaw: float,
-                       desired_vel: NDArray,
-                       dt: float,
-                       planning_horizon: float) -> List[List[FootstepPlan]]:
-        """Plan footsteps over time horizon using Raibert Heuristic
+        # Plan landing positions for swing feet using Raibert heuristic
+        for leg in range(self.n_legs):
+            if contact_state[leg] == 0: # In swing
+                # Get hip position in world frame from pinocchio
+                p_hip = self.quadruped.get_hip_position(q_current, leg)
 
-        Args:
-            gait_scheduler: Current gait scheduler
-            current_pos: Current robot COM position (x,y,z)
-            current_yaw: Current robot yaw
-            desired_vel: Desired COM velocity (x,y,z)
-            dt: Timestep duration
-            planning_horizon: How far to plan ahead
+                # Raibert Heuristic
+                p_des = (p_hip + com_state[1] * (stance_duration / 2) + self.k_raibert * (com_state[1] - desired_vel))
+
+                self.next_footholds[leg] = p_des
+            
+        return self.next_footholds
+    
+    def get_foot_positions_for_mpc(self,
+                                   current_positions: np.ndarray,
+                                   gait_scheduler: GaitScheduler, 
+                                   horizon_length: int,
+                                   dt: float) -> np.ndarray:
+        """
+        Plans footsteps for the entire MPC horizon
+
+        Params:
+            current_positions: current robot state
+            gait_scheduler: Gait Scheduler to define gait info
+            horizon_length: length of the MPC horizon
+            dt: MPC update rate
 
         Returns:
-            List of FootstepPlans for each leg
+            foot_positions: Planned foot positions for length of the entire horizon
         """
+        # Get stance states across horizon
+        horizon_states = gait_scheduler.predict_horizon_contact_state(dt, horizon_length)
 
-        # Get number of timesteps in horizon
-        n_steps = int(planning_horizon / dt)
+        # For each timestep in horizon
+        foot_positions = np.zeros((horizon_length, self.n_legs * 3))
+        for k in range(horizon_length):
+            for leg in range(self.n_legs):
+                if horizon_states[k, leg] == 1: # If in stance
+                    # Use current robot position (from state estimate or ground truth in sim?)
+                    foot_positions[k, leg*3:(leg+1)*3] = current_positions[leg]
+                else: # If in swing
+                    # Use planned landing position
+                    foot_positions[k, leg*3:(leg+1)*3] = self.next_footholds[leg]
 
-        # Initialize plans for each leg
-        footstep_plans = [[] for _ in range(4)]
+        return foot_positions
 
-        # Get stance durations from gait scheduler
-        stance_duration = gait_scheduler.gait_data.time_stance
-
-        # Create rotation matrix from yaw
-        R = np.array([
-            [np.cos(current_yaw), -np.sin(current_yaw), 0],
-            [np.sin(current_yaw),  np.cos(current_yaw), 0],
-            [0,                    0,                   1]
-        ])
-        
-        # Plan for each leg
-        for leg in range(4):
-            # Only plan if leg is enabled
-            if gait_scheduler.gait_data.gait_enabled[leg] == 1:
-                # Get phase and timing info
-                phase = gait_scheduler.gait_data.phase_variable[leg]
-
-                # Check if were entering swing phase
-                if (gait_scheduler.gait_data.contact_state_scheduled[leg] == 1 
-                    and gait_scheduler.gait_data.time_stance_remaining[leg] < planning_horizon):
-                        
-                    # Get timing
-                    start_time = gait_scheduler.gait_data.time_stance_remaining[leg] + gait_scheduler.dt
-                    contact_time = gait_scheduler.gait_data.time_swing[leg]
-                    lift_time = contact_time + stance_duration[leg]
-
-                    # Get reference position (location on ground beneath the hip) (prob use pinocchio)
-                    p_ref = current_pos + R @ self.default_stance[leg]
-
-                    # Apply Raibert Heuristic
-                    # p_des = p_ref + v_com * Δt/2
-                    delta_t = stance_duration[leg]
-                    p_des = p_ref + desired_vel * (delta_t / 2)
-
-                    # Keep Z at default height
-                    p_des[2] = self.default_height
-
-                    # Create footstep plan
-                    plan = FootstepPlan(
-                        position=p_des,
-                        start_time=start_time,
-                        contact_time=contact_time,
-                        lift_time=lift_time
-                    )
-
-                    footstep_plans[leg].append(plan)
-        
-        return footstep_plans
-                    
-    def get_foot_positions(self,
-                           gait_scheduler: GaitScheduler,
-                           footstep_plans: List[List[FootstepPlan]],
-                           current_time: float) -> List[NDArray]:
-        """Get current desired foot positions.
-
-        Args:
-            gait_scheduler: Current gait scheduler
-            footstep_plans: List of footstep plans for each leg
-            current_time: Current time
-
-        Returns:
-            List of desired foot positions for each leg
-        """
-
-        positions = []
-
-        for leg in range(4):
-            # Find active plan for this leg
-            active_plan = None
-            for plan in footstep_plans[leg]:
-                if plan.start_time <= current_time <= plan.lift_time:
-                    active_plan = plan
-                    break
-
-            if active_plan is None:
-                # No active plan, use current position
-                pos = np.array([0.0, 0.0, self.default_height]) # Get actual position with pincchio
-            else:
-                pos = active_plan.position
-
-            positions.append(pos)
-
-        return positions
     
-# Example usage 
-if __name__ == "__main__":
-    from gait_scheduler import GaitScheduler, GaitType
-    
-    # Create scheduler
-    gait_scheduler = GaitScheduler(dt=0.02)
-    footstep_planner = FootstepPlanner()
-    
-    # Test planning
-    current_pos = np.array([0., 0., 0.5])
-    current_yaw = 0.0
-    desired_vel = np.array([0.5, 0., 0.])  # Moving forward at 0.5 m/s
-    
-    # Plan footsteps
-    plans = footstep_planner.plan_footsteps(
-        gait_scheduler=gait_scheduler,
-        current_pos=current_pos,
-        current_yaw=current_yaw,
-        desired_vel=desired_vel,
-        dt=0.02,
-        planning_horizon=0.5
-    )
-    print(plans)
-    
-    # Get foot positions for current time
-    positions = footstep_planner.get_foot_positions(
-        gait_scheduler=gait_scheduler,
-        footstep_plans=plans,
-        current_time=0.0
-    )
-    print(positions)
+

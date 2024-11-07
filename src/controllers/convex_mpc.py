@@ -14,6 +14,7 @@ class MPCParams:
     mass: float = 12.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
     mu: float = 0.04            # Friction Coeff.
+    I_body: np.ndarray
 
     # Force limits
     f_min: float = 0.0          # Min vertical force
@@ -153,8 +154,6 @@ class ConvexMPC():
             for i, (f, p) in enumerate(zip(forces, self.foot_positions[k])):
                     total_torque += self.contact_sched[i, k] * ca.cross(p, f)
             
-            # Get inertia matrix from pinocchio (implement)
-            I_body = ca.diag([0.3, 0.3, 0.3])
             ang_vel_next = ang_vel + self.params.dt * ca.solve(I_body, total_torque)
 
             # Combine next state
