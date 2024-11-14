@@ -12,7 +12,7 @@ class ForceMapper:
 
         # Store foot frame ids
         self.foot_frames = {
-            'FL': self.model.getFramedId("FL_foot"),
+            'FL': self.model.getFrameId("FL_foot"),
             'FR': self.model.getFrameId("FR_foot"),
             'RL': self.model.getFrameId("RL_foot"),
             'RR': self.model.getFrameId("RR_foot")

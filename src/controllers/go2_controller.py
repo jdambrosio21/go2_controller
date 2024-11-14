@@ -35,7 +35,7 @@ class Go2Controller:
 
         # 2. Get current state
         com_pos = q[0:3]
-        com_ori = q[3:6] # Convert to quaternion
+        com_ori = self.quadruped.quat_to_rpy(q[3:7]) # Conversion for MPC
         com_vel = dq[0:3]
         com_ang_vel = dq[3:6]
 

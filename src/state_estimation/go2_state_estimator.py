@@ -1,7 +1,7 @@
 import time
 import sys
 import numpy as np
-import unitree_legged_const as go2
+from . import unitree_legged_const as go2
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_, unitree_go_msg_dds__SportModeState_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_, SportModeState_
@@ -28,10 +28,10 @@ class Go2StateEstimator:
 
         # Define leg indices 
         self.leg_indices = {
-            "FR": [go2.legID["FR_0"], [go2.legID["FR_1"]], [go2.legID["FR_2"]]],
-            "FL": [go2.legID["FL_0"], [go2.legID["FL_1"]], [go2.legID["FL_2"]]],
-            "BR": [go2.legID["BR_0"], [go2.legID["BR_1"]], [go2.legID["BR_2"]]],
-            "BL": [go2.legID["BL_0"], [go2.legID["BL_1"]], [go2.legID["BL_2"]]]
+            "FL": [go2.LegID["FL_0"], [go2.LegID["FL_1"]], [go2.LegID["FL_2"]]],
+            "FR": [go2.LegID["FR_0"], [go2.LegID["FR_1"]], [go2.LegID["FR_2"]]],
+            "BL": [go2.LegID["RL_0"], [go2.LegID["RL_1"]], [go2.LegID["RL_2"]]],
+            "BR": [go2.LegID["RR_0"], [go2.LegID["RR_1"]], [go2.LegID["RR_2"]]]
         }
         
     def low_state_callback(self, msg: LowState_):
@@ -66,7 +66,7 @@ class Go2StateEstimator:
 
         joint_angles = []
         joint_velocities = []
-        for leg in ["FR", "FL", "BR", "BL"]:
+        for leg in ["FL", "FR", "BL", "BR"]:
             for i in self.leg_indices:
                 joint_angles.append(self.low_state.motor_state[i].q)
                 joint_velocities.append(self.low_state.motor_state[i].dq)

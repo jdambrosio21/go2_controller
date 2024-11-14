@@ -1,5 +1,5 @@
 import numpy as np
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 from numpy.typing import NDArray
 
 class FootSwingTrajectory:
@@ -148,19 +148,19 @@ if __name__ == "__main__":
     velocities = np.array(velocities)
     accelerations = np.array(accelerations)
     
-    # plt.figure(figsize=(12, 4))
-    # plt.subplot(131)
-    # plt.plot(phases, positions)
-    # plt.title('Position')
-    # plt.legend(['x', 'y', 'z'])
+    plt.figure(figsize=(12, 4))
+    plt.subplot(131)
+    plt.plot(phases, positions)
+    plt.title('Position')
+    plt.legend(['x', 'y', 'z'])
     
-    # plt.subplot(132)
-    # plt.plot(phases, velocities)
-    # plt.title('Velocity')
+    plt.subplot(132)
+    plt.plot(phases, velocities)
+    plt.title('Velocity')
     
-    # plt.subplot(133)
-    # plt.plot(phases, accelerations)
-    # plt.title('Acceleration')
+    plt.subplot(133)
+    plt.plot(phases, accelerations)
+    plt.title('Acceleration')
     
-    # plt.tight_layout()
-    # plt.show()
+    plt.tight_layout()
+    plt.show()
