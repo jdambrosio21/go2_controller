@@ -14,7 +14,7 @@ class MPCParams:
     mass: float = 12.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
     mu: float = 0.04            # Friction Coeff.
-    I_body: np.ndarray
+    I_body: np.ndarray = None
 
     # Force limits
     f_min: float = 0.0          # Min vertical force

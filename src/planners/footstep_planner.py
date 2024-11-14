@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from gait_scheduler import GaitScheduler
+from planners.gait_scheduler import GaitScheduler
 from quadruped import Quadruped
 
 class FootstepPlanner:

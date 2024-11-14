@@ -1,10 +1,10 @@
 import numpy as np
 import pinocchio as pin
-from pinocchio import casadi as cpin
+#from pinocchio import casadi as cpin
 
 class Quadruped:
     def __init__(self, urdf_path):
-        self.model = pin.buildModelFromUrdf(urdf_path)
+        self.model = pin.buildModelFromUrdf(urdf_path, pin.JointModelFreeFlyer())
         self.data = self.model.createData()
 
         # Store hip frame ID's
