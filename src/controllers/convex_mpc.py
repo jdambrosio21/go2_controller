@@ -75,7 +75,7 @@ class ConvexMPC():
         # Initialize Cost function
         cost = 0
 
-        Q = ca.diag([
+        self.Q = ca.diag([
             self.params.w_position, self.params.w_position, self.params.w_position,         # Position
             self.params.w_orientation, self.params.w_orientation, self.params.w_orientation, # Orientation
             self.params.w_velocity, self.params.w_velocity, self.params.w_velocity,         # Linear velocity
@@ -83,15 +83,15 @@ class ConvexMPC():
             0  # gravity state
         ])
         
-        R = self.params.w_force * ca.diag(self.n_inputs)
+        self.R = self.params.w_force * ca.diag(self.n_inputs)
         
         # Add costs for the entire horizon
         for k in range(self.params.horizon_steps):
             # State error cost
-            cost += (self.X[:, k] - self.x_ref[:, k]).T @ Q @ (self.X[:, k] - self.x_ref[:, k])
+            cost += (self.X[:, k] - self.x_ref[:, k]).T @ self.Q @ (self.X[:, k] - self.x_ref[:, k])
 
             # Control cost
-            cost += self.U[:, k].T @ R @ self.U[:, k]
+            cost += self.U[:, k].T @ self.R @ self.U[:, k]
         
         self.opti.minimize(cost)
         
@@ -195,37 +195,80 @@ class ConvexMPC():
             Optimal forces for first time step [12] or None if failed
         """
 
-        # Setup solver
+        # Print problem dimensions and data
+        print("\nMPC Problem Setup:")
+        print(f"Number of variables: {self.X.shape[0] * self.X.shape[1] + self.U.shape[0] * self.U.shape[1]}")
+        print(f"State dimension: {self.X.shape}")
+        print(f"Input dimension: {self.U.shape}")
+        
+        # Print inputs
+        print("\nInputs:")
+        print(f"x0: {x0}")
+        print(f"x_ref shape: {x_ref.shape}")
+        print(f"contact_schedule shape: {contact_schedule.shape}")
+        
+        # Print cost matrices
+        print("\nCost Setup:")
+        print(f"Q matrix shape: {self.Q.shape}")  # Add self.Q as class variable
+        print(f"R matrix shape: {self.R.shape}")  # Add self.R as class variable
+
+        # Setup QP solver with more detailed options
         opts = {
-            'print_time': False,
-            'verbose': False,
-            'qpsol': 'qpoases',
-            'qpsol_options': {
-                'printlevel': 'none'
+            'verbose': True,  # Enable for debugging
+            'osqp': {
+                'verbose': True,
+                'eps_abs': 1e-2,        # Increase tolerance
+                'eps_rel': 1e-2,        # Increase tolerance
+                'max_iter': 4000,
+                'warm_start': True,
+                'polish': True,         # Enable solution polishing
+                'adaptive_rho': True,
+                'adaptive_rho_interval': 25
             }
         }
-
-        self.opti.solver('qpoases', opts)
-
-        x0 = ca.DM(x0.tolist())
-        x_ref = ca.DM(x_ref.tolist())
-        contact_schedule = ca.DM(contact_schedule.tolist())
-
-        # Set parameters
-        self.opti.set_value(self.x0, x0)
-        self.opti.set_value(self.x_ref, x_ref)
-        self.opti.set_value(self.contact_sched, contact_schedule)
-
-        # Set foot positions
-        for k in range(self.params.horizon_steps):
-            for i in range(3):
-                self.opti.set_value(self.foot_positions[k][i], foot_positions[k][i])
         
-        # Solve
+        self.opti.solver('osqp', opts)
+
         try:
+            # Set values and print bounds
+            print("\nSetting parameter values...")
+            x0 = ca.DM(x0.tolist())
+            x_ref = ca.DM(x_ref.tolist())
+            contact_schedule = ca.DM(contact_schedule.tolist())
+            self.opti.set_value(self.x0, x0)
+            self.opti.set_value(self.x_ref, x_ref)
+            self.opti.set_value(self.contact_sched, contact_schedule)
+
+            print("Setting foot positions:")
+            print(f"Number of timesteps: {len(foot_positions)}")
+            print(f"Number of feet: {len(foot_positions[0])}")
+
+            for k in range(self.params.horizon_steps):
+                for i in range(4):
+                    self.opti.set_value(self.foot_positions[k][i], foot_positions[k][i])
+            
+            print("\nAttempting to solve...")
             sol = self.opti.solve()
+            
+            # Print solution status
+            print(f"\nSolution status: {sol.stats()}")
+            
             forces = sol.value(self.U)[:, 0]
+            print(f"Optimal forces: {forces}")
+            
             return forces
-        except:
-            print("QP solve failed")
+
+        except Exception as e:
+            print(f"\nMPC solve failed with error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Print current variable values
+            try:
+                print("\nCurrent variable values:")
+                print(f"X: {self.opti.debug.value(self.X)}")
+                print(f"U: {self.opti.debug.value(self.U)}")
+            except:
+                print("Could not print debug values")
+                
             return None

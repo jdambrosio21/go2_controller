@@ -10,7 +10,7 @@ from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_, unitree_go_m
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 
-# Your implemented classes
+# Implemented classes
 from controllers.convex_mpc import ConvexMPC, MPCParams
 from planners.gait_scheduler import GaitScheduler
 from controllers.force_mapper import ForceMapper
@@ -21,6 +21,21 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize robot model and estimator
         self.robot = Quadruped(urdf_path)
+
+        # # Initialize communication
+        # if len(sys.argv) < 2:
+        #     ChannelFactoryInitialize(1, "lo")
+        # else:
+        #     ChannelFactoryInitialize(0, sys.argv[1])
+            
+        self.pub = ChannelPublisher("rt/lowcmd", LowCmd_)
+        self.pub.Init()
+        
+        # Initialize command
+        self.cmd = unitree_go_msg_dds__LowCmd_()
+        self.initialize_command()
+        self.crc = CRC()
+
         self.state_estimator = Go2StateEstimator()
 
         # Initialize MPC
@@ -53,20 +68,7 @@ class Go2Controller:
             -0.0473455, 1.22187, -2.44375
         ])
 
-        # Initialize communication
-        if len(sys.argv) < 2:
-            ChannelFactoryInitialize(1, "lo")
-        else:
-            ChannelFactoryInitialize(0, sys.argv[1])
-            
-        self.pub = ChannelPublisher("rt/lowcmd", LowCmd_)
-        self.pub.Init()
         
-        # Initialize command
-        self.cmd = unitree_go_msg_dds__LowCmd_()
-        self.initialize_command()
-        self.crc = CRC()
-
     def initialize_command(self):
         """Initialize command message"""
         self.cmd.head[0] = 0xFE
@@ -130,60 +132,68 @@ class Go2Controller:
         """Run single iteration of MPC control"""
         try:
             # Get current state
-            q, dq, foot_positions = self.state_estimator.get_state()
+            q, dq = self.state_estimator.get_state()
             
-            if q is None or dq is None or foot_positions is None:
+            if q is None or dq is None:
                 print("Waiting for valid state...")
                 return  # Just return and try again next cycle
-        except Exception as e:
-            print(f"Control loop failed: {e}")
-            self.state = "STANDUP"
-        
-        # All feet in stance initially
-        contact_state = np.ones(4)  
-        
-        # 2. Run MPC
-        x0 = np.concatenate([
-            q[0:3],     # position
-            self.robot.quat_to_rpy(q[3:7]),  # orientation (using your method)
-            dq[0:3],    # linear velocity
-            dq[3:6],    # angular velocity
-            [9.81]      # gravity
-        ])
-        
-        # Get foot positions using your Pinocchio method
-        foot_positions = self.robot.get_foot_positions(q)
-        
-        mpc_forces = self.mpc.solve(
-            x0=x0,
-            x_ref=self._create_stance_ref(),
-            contact_schedule=contact_state,
-            foot_positions=foot_positions
-        )
-        
-        # 3. Map forces to torques
-        for i, leg in enumerate(["FR", "FL", "RR", "RL"]):
-            force = mpc_forces[i*3:(i+1)*3]
-            tau = self.force_mapper.compute_leg_torques(
-                leg_id=leg,
-                q=q,
-                mode='stance',
-                force=force,
-                R=np.eye(3)
+
+            # Get foot positions using Pinocchio method
+            foot_position = self.robot.get_foot_positions(q)
+            
+            # Create contact schedule for full horizon
+            horizon_steps = self.mpc.params.horizon_steps
+            contact_schedule = np.ones((4, horizon_steps))
+            
+            # Create foot positions for horizon
+            foot_pos_horizon = []
+            for _ in range(horizon_steps):
+                foot_pos_horizon.append(foot_position) # assume same foot position across horizon to start
+            
+            # 2. Run MPC
+            x0 = np.concatenate([
+                q[0:3],     # position
+                self.robot.quat_to_rpy(q[3:7]),  # orientation
+                dq[0:3],    # linear velocity
+                dq[3:6],    # angular velocity
+                [9.81]      # gravity
+            ])
+            
+            
+            mpc_forces = self.mpc.solve(
+                x0=x0,
+                x_ref=self._create_stance_ref(),
+                contact_schedule=contact_schedule,
+                foot_positions=foot_pos_horizon
             )
             
-            # Send to motors
-            indices = self._get_leg_indices(leg)
-            for j, idx in enumerate(indices):
-                self.cmd.motor_cmd[idx].mode = 0x01  # Torque control
-                self.cmd.motor_cmd[idx].tau = tau[j]
-                self.cmd.motor_cmd[idx].kp = 0
-                self.cmd.motor_cmd[idx].kd = 0
-        
-        self.cmd.crc = self.crc.Crc(self.cmd)
-        self.pub.Write(self.cmd)
+            # 3. Map forces to torques
+            for i, leg in enumerate(["FR", "FL", "RR", "RL"]):
+                force = mpc_forces[i*3:(i+1)*3]
+                tau = self.force_mapper.compute_leg_torques(
+                    leg_id=leg,
+                    q=q,
+                    mode='stance',
+                    force=force,
+                    R=np.eye(3)
+                )
+                
+                # Send to motors
+                indices = self._get_leg_indices(leg)
+                for j, idx in enumerate(indices):
+                    self.cmd.motor_cmd[idx].mode = 0x01  # Torque control
+                    self.cmd.motor_cmd[idx].tau = tau[j]
+                    self.cmd.motor_cmd[idx].kp = 0
+                    self.cmd.motor_cmd[idx].kd = 0
+            
+            self.cmd.crc = self.crc.Crc(self.cmd)
+            self.pub.Write(self.cmd)
 
-        
+        except Exception as e:
+            print(f"Control loop failed: {e}")
+            import traceback
+            traceback.print_exc()
+            self.state = "STANDUP"
 
     def _create_stance_ref(self):
         """Create standing reference for MPC"""
@@ -202,5 +212,16 @@ class Go2Controller:
         return indices[leg]
 
 if __name__ == "__main__":
+    print("Starting controller...")
+    
+    # Initialize DDS first
+    if len(sys.argv) < 2:
+        ChannelFactoryInitialize(1, "lo")
+    else:
+        ChannelFactoryInitialize(0, sys.argv[1])
+    
+    # Then create controller
+    input("Press enter to start")  # Like in working example
+    
     controller = Go2Controller("/home/parallels/go2_controller/robots/go2_description/xacro/go2_generated.urdf")
     controller.run()

@@ -11,16 +11,16 @@ class Quadruped:
         # Store the correct frame IDs for hips and feet
         self.leg_frame_ids = {
             "hip": {
-                0: self.model.getFrameId("FL_hip"),
-                1: self.model.getFrameId("FR_hip"),
-                2: self.model.getFrameId("RL_hip"),
-                3: self.model.getFrameId("RR_hip")
+                "FL": self.model.getFrameId("FL_hip"),
+                "FR": self.model.getFrameId("FR_hip"),
+                "RL": self.model.getFrameId("RL_hip"),
+                "RR": self.model.getFrameId("RR_hip")
             },
             "foot": {
-                0: self.model.getFrameId("FL_foot"),
-                1: self.model.getFrameId("FR_foot"),
-                2: self.model.getFrameId("RL_foot"),
-                3: self.model.getFrameId("RR_foot")
+                "FL": self.model.getFrameId("FL_foot"),
+                "FR": self.model.getFrameId("FR_foot"),
+                "RL": self.model.getFrameId("RL_foot"),
+                "RR": self.model.getFrameId("RR_foot")
             }
         }
         q = pin.neutral(self.model)
@@ -51,19 +51,27 @@ class Quadruped:
 
         return hip_position
     
-    def get_foot_positions(self, q: np.ndarray, leg: int):
+    def get_foot_positions(self, q: np.ndarray) -> np.ndarray:
         """
-            Gets foot positions in world frame
+            Get all feet positions in world frame
+
+            Args:
+                q: Full state vector [19] (base + joints)
+            
+            Returns:
+                foot_positions: [4,3] array of foot positions
         """
         # Update kinematics
         pin.forwardKinematics(self.model, self.data, q)
         pin.updateFramePlacements(self.model, self.data)
 
-        # Get foot frame positions
-        foot_frame_id = self.leg_frame_ids["foot"][leg]
-        foot_position = self.data.oMf[foot_frame_id].translation
+        # Get all foot positions
+        foot_positions = np.zeros((4, 3))
+        for i, leg in enumerate(["FR", "FL", "RR", "RL"]):
+            foot_frame_id = self.leg_frame_ids["foot"][leg]
+            foot_positions[i] = self.data.oMf[foot_frame_id].translation
 
-        return foot_position
+        return foot_positions
     
     def quat_to_rpy(self, quat: np.ndarray):
         """
@@ -91,10 +99,10 @@ if __name__ == "__main__":
     q = np.zeros(robot.model.nq)  # Initialize to zeros
     
     # Test get_hip_position for leg 0
-    print("Hip position of leg 0:", robot.get_hip_position(q, 0))
+    #print("Hip position of leg 0:", robot.get_hip_position(q, 0))
     
     # Test get_foot_positions for leg 0
-    print("Foot position of leg 0:", robot.get_foot_positions(q, 0))
+    print("Foot position of leg:", robot.get_foot_positions(q))
     
     # Test quaternion to RPY conversion
     quat = np.array([0, 0, 0, 1])  # Identity quaternion
