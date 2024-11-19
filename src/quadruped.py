@@ -14,7 +14,11 @@ class Quadruped:
                 "FL": self.model.getFrameId("FL_hip"),
                 "FR": self.model.getFrameId("FR_hip"),
                 "RL": self.model.getFrameId("RL_hip"),
-                "RR": self.model.getFrameId("RR_hip")
+                "RR": self.model.getFrameId("RR_hip"),
+                    0: self.model.getFrameId("FL_hip"),
+                    1: self.model.getFrameId("FR_hip"),
+                    2: self.model.getFrameId("RL_hip"),
+                    3: self.model.getFrameId("RR_hip")
             },
             "foot": {
                 "FL": self.model.getFrameId("FL_foot"),
@@ -28,7 +32,12 @@ class Quadruped:
 
         self.mass = pin.computeTotalMass(self.model, self.data)
         pin.ccrba(self.model, self.data, q, v)
-        self.inertia = self.data.Ig.inertia
+        self.inertia_p = self.data.Ig.inertia
+        self.inertia = np.zeros(3)
+        self.inertia[0] = self.inertia_p[0, 0]
+        self.inertia[1] = self.inertia_p[1, 1]
+        self.inertia[2] = self.inertia_p[2, 2]
+
 
     def get_hip_position(self, q: np.ndarray, leg: int):
         """
@@ -45,9 +54,11 @@ class Quadruped:
         pin.forwardKinematics(self.model, self.data, q)
         pin.updateFramePlacements(self.model, self.data)
 
+        hip_position = np.zeros(3)
+
         # Get hip frame position
         hip_frame_id = self.leg_frame_ids["hip"][leg]
-        hip_position = self.data.oMf[hip_frame_id].translation
+        hip_position[:2]= self.data.oMf[hip_frame_id].translation[:2]
 
         return hip_position
     
@@ -87,11 +98,21 @@ class Quadruped:
         quaternion = pin.Quaternion(quat[3], quat[0], quat[1], quat[2])  # Note the order: w, x, y, z
         rpy = pin.rpy.matrixToRpy(quaternion.toRotationMatrix())
         return rpy
-
+    def print_dof_ordering(self):
+        """
+        Prints the DoF ordering and their indices in the configuration (q) and velocity (v) vectors.
+        """
+        print("Degrees of Freedom (DoF) ordering and index in Pinocchio:")
+        print("Joint Name        | Index in q | Index in v | DoF (nv)")
+        print("-------------------------------------------------------")
+        for i, joint in enumerate(self.model.joints):
+            joint_name = self.model.names[i]
+            print(f"{joint_name:<16} | {joint.idx_q:<10} | {joint.idx_v:<10} | {joint.nv:<3}")
    
         
 if __name__ == "__main__":
-    robot = Quadruped("/home/parallels/go2_controller/robots/go2_description/xacro/go2_generated.urdf")    
+    robot = Quadruped("/home/parallels/go2_controller/robots/go2_description/xacro/go2_generated.urdf") 
+    robot.print_dof_ordering()
     print("Inertia:", robot.inertia)
     print("Mass:", robot.mass)
     
@@ -99,7 +120,10 @@ if __name__ == "__main__":
     q = np.zeros(robot.model.nq)  # Initialize to zeros
     
     # Test get_hip_position for leg 0
-    #print("Hip position of leg 0:", robot.get_hip_position(q, 0))
+    print("Hip position of leg 0:", robot.get_hip_position(q, 0))
+    print("Hip position of leg 1:", robot.get_hip_position(q, 1))
+    print("Hip position of leg 2:", robot.get_hip_position(q, 2))
+    print("Hip position of leg 3:", robot.get_hip_position(q, 3))
     
     # Test get_foot_positions for leg 0
     print("Foot position of leg:", robot.get_foot_positions(q))

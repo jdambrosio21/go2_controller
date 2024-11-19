@@ -11,21 +11,21 @@ class MPCParams:
     horizon_steps: int = 10     # Length of horizon
 
     # Robot params
-    mass: float = 12.0          # Mass (should get from pinocchio instead)
+    mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
     mu: float = 0.04            # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
     f_min: float = 0.0          # Min vertical force
-    f_max: int = 400.0          # Max vertical force
+    f_max: float = 222.0          # Max vertical force
 
     # Weights for QP
-    w_position = 100.0       # Position tracking weight
-    w_orientation = 100.0    # Orientation tracking weight
-    w_velocity = 10.0        # Velocity tracking weight 
-    w_angular_vel = 10.0     # Angular velocity tracking weight
-    w_force = 0.001         # Minimize forces weight
+    w_position = 50.0       # Position tracking weight
+    w_orientation = 50.0    # Orientation tracking weight
+    w_velocity = 1.0        # Velocity tracking weight 
+    w_angular_vel = 1.0     # Angular velocity tracking weight
+    w_force = 1e-6          # Minimize forces weight
 
 
 class ConvexMPC():
@@ -48,21 +48,15 @@ class ConvexMPC():
 
         # Setup optimization vairables
         self.X = self.opti.variable(self.n_states, self.params.horizon_steps + 1)
-        self.U = self.opti.variable(self.n_inputs, self.params.horizon_steps)
+        self.U = self.opti.variable(self.n_inputs, self.params.horizon_steps) # [FL(3), FR(3), RL (3), RR (3)]
 
         # Parameters that will be set at each solving instance
         self.x0 = self.opti.parameter(self.n_states)
         self.x_ref = self.opti.parameter(self.n_states, self.params.horizon_steps + 1)
         self.contact_sched = self.opti.parameter(4, self.params.horizon_steps) # 4 feet
 
-        # Setup foot position parameters for each timestep and foot
-        self.foot_positions = []
-        for k in range(self.params.horizon_steps):
-            foot_pos_k = []
-            for i in range(4):  # 4 feet, not 3
-                pos = self.opti.parameter(3)  # xyz position
-                foot_pos_k.append(pos)
-            self.foot_positions.append(foot_pos_k)
+        # Initialize foot positions as a symbolic MX matrix
+        self.foot_positions = self.opti.parameter(12, self.params.horizon_steps)
         
         self.add_constraints()
         
@@ -75,15 +69,16 @@ class ConvexMPC():
         # Initialize Cost function
         cost = 0
 
-        self.Q = ca.diag([
-            self.params.w_position, self.params.w_position, self.params.w_position,         # Position
-            self.params.w_orientation, self.params.w_orientation, self.params.w_orientation, # Orientation
-            self.params.w_velocity, self.params.w_velocity, self.params.w_velocity,         # Linear velocity
-            self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
-            0  # gravity state
-        ])
+        # self.Q = ca.diag([
+        #     self.params.w_position, self.params.w_position, self.params.w_position,         # Position
+        #     self.params.w_orientation, self.params.w_orientation, self.params.w_orientation, # Orientation
+        #     self.params.w_velocity, self.params.w_velocity, self.params.w_velocity,         # Linear velocity
+        #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
+        #     0  # gravity state
+        # ])
+        self.Q = ca.diag([100,100,0,0,0,100,1,1,1,1,1,1,0]) 
         
-        self.R = self.params.w_force * ca.diag(self.n_inputs)
+        self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
         # Add costs for the entire horizon
         for k in range(self.params.horizon_steps):
@@ -108,75 +103,90 @@ class ConvexMPC():
         """Adds the constraint that the first state decision variable equals the robot's starting state"""
         self.opti.subject_to(self.X[:, 0] == self.x0)
     
+    # TODO: Get discretized dynamics from reference trajectory and footstep planner 
+    def get_discretized_dynamics(self, yaw: float, r: np.ndarray) -> tuple[ca.DM, ca.DM]:
+        """
+            Calculates linearized discrete time dynamics 
+
+            Args:
+                yaw: The desired yaw value at the n-th point in the reference trajectory
+                r: a [12 x 3] matrix, where each row is a xyz vector from the CoM to the ith contact point
+            
+            Returns:
+                Ad: A [13 x 13] Matrix representing the discrete time dynamics of the state at the nth point
+                Bd: A [13 x 12] Matrix representing the discrete time dynamics of the control input at the nth point
+        """
+        # Create A matrix for state augmented with gravity
+        A = ca.MX.zeros((13, 13))
+        R_z_yaw = ca.vertcat(
+            ca.horzcat(ca.cos(yaw), ca.sin(yaw), 0),
+            ca.horzcat(-ca.sin(yaw), ca.cos(yaw), 0),
+            ca.horzcat(0, 0, 1)
+        )
+
+        A[0:3, 6:9] = R_z_yaw.T
+        A[3:6, 9:12] = ca.DM_eye(3)
+        A[-1, -1] = 1
+
+        # Create B matrix (13 x 3n) n = 4 contact points for 4 legs
+        B = ca.MX.zeros((13, 12))
+        # Use r directly without nested unpacking
+        I_r_x = [ca.mtimes(ca.inv(ca.diag(self.I_body_ca)), ca.skew(r[3 * i : 3 * (i + 1)])) for i in range(4)]
+        B[6:9, :] = ca.horzcat(*I_r_x)
+        B[9:12, :] = ca.repmat(ca.MX.eye(3) * (1 / self.params.mass), 1, 4)
+
+
+        # Discretize matrix using matrix exponential
+        M = ca.vertcat(
+            ca.horzcat(A, B),
+            ca.horzcat(ca.DM.zeros((12, 13)), ca.DM_eye(12))
+        )
+
+        M_d = matrix_exp(M * self.params.dt)
+
+        # Extract discrete-time Ad and Bd
+        Ad = M_d[:13, :13]
+        Bd = M_d[:13, 13:]
+
+        return Ad, Bd
+
+
+
     def add_dynamics_constraints(self):
         """Adds dynamics constraints to ensure the next state decision variable matches the simplified dynamics"""
 
         # over the entire horizon
         for k in range(self.params.horizon_steps):
             # Get current state elements
-            pos = self.X[0:3, k]
-            ori = self.X[3:6, k]
-            lin_vel = self.X[6:9, k]
-            ang_vel = self.X[9:12, k]
-            g = self.X[12, k]
+            yaw = self.X[5, k]
+    
+            Ad, Bd = self.get_discretized_dynamics(yaw, self.foot_positions)
 
-            # Dynamics constraints (equation 16 from paper)
-            # Only use yaw rotation (small angle approximation for roll/pitch)
-            yaw = ori[2]
-            R_yaw = ca.vertcat(
-                ca.horzcat(ca.cos(yaw), -ca.sin(yaw), 0),
-                ca.horzcat(ca.sin(yaw), ca.cos(yaw), 0),
-                ca.horzcat(0, 0, 1)
-            )
+            X_next = Ad @ self.X[:, k] + Bd @ self.U[:, k]
 
-            # Position dynamics
-            pos_next = pos + self.params.dt * lin_vel
-
-            # Simplified orientation dynamics
-            ori_next = ori + self.params.dt + ang_vel
-
-            # Velocity dynamics
-
-            # Extract forces for each foot
-            forces = []
-            for i in range(4):
-                f_i = self.U[i * 3:(i + 1) * 3, k]
-                forces.append(f_i)
-
-            total_force = sum(forces)
-            lin_vel_next = lin_vel + self.params.dt * (
-                total_force/self.params.mass - 
-                ca.vertcat(0, 0, self.params.gravity)
-            )
-
-            # Simplified angular velocity dynamics
-            # Calc torques from forces and foot positions
-            total_torque = ca.DM.zeros(3)
-            for i, (f, p) in enumerate(zip(forces, self.foot_positions[k])):
-                    total_torque += self.contact_sched[i, k] * ca.cross(p, f)
-            
-            ang_vel_next = ang_vel + self.params.dt * ca.solve(self.I_body_ca, total_torque)
-
-            # Combine next state
-            X_next = ca.vertcat(pos_next, ori_next, lin_vel_next, ang_vel_next, g)
-            self.opti.subject_to(self.X[:, k + 1] == X_next)
+            self.opti.subject_to(self.X[:, k+1] == X_next)
     
     def add_contact_constraints(self):
         """Adds constraints on forces for contact feet and friction cone"""
         
         for k in range(self.params.horizon_steps):
-            # Extract forces 
-            forces = []
             for i in range(4): # For each foot
                 f_i = self.U[i * 3:(i + 1) * 3, k]
-                forces.append(f_i)
 
                 # Add force constraints for each foot in contact
-                self.opti.bounded(self.params.f_min, self.contact_sched[i, k] * f_i[2], self.params.f_max)
+                # Enforce vertical (z) force constraints for stance phase
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[2] >= self.params.f_min)
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[2] <= self.params.f_max)
 
-                # Friction cone constraints
-                self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[0], self.params.mu * f_i[2])
-                self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[1], self.params.mu * f_i[2])
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[0] >= -self.params.mu * f_i[2]) # Fx >= -mu Fz
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[0] <= self.params.mu * f_i[2]) # Fx <= mu Fz
+
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[1] >= -self.params.mu * f_i[2]) # Fy >= -mu Fz
+                self.opti.subject_to(self.contact_sched[i, k] * f_i[1] <= self.params.mu * f_i[2]) # Fy <= mu Fz
+
+
+                # Force components must be zero when foot is not in contact
+                #self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i == 0)
 
     def solve(self,
               x0: NDArray,
@@ -189,49 +199,25 @@ class ConvexMPC():
             x0: Initial state [13]
             x_ref: Reference trajectory [13 x horizon_steps + 1]
             contact_schedule: Contact flags [4 x horizon steps]
-            foot_positions: Foot positions for horizon [horizon_steps x 4 x 3]
+            foot_positions: Foot positions for horizon [12 x horizon steps]
         
         Returns:
             Optimal forces for first time step [12] or None if failed
         """
 
-        # Print problem dimensions and data
-        print("\nMPC Problem Setup:")
-        print(f"Number of variables: {self.X.shape[0] * self.X.shape[1] + self.U.shape[0] * self.U.shape[1]}")
-        print(f"State dimension: {self.X.shape}")
-        print(f"Input dimension: {self.U.shape}")
-        
-        # Print inputs
-        print("\nInputs:")
-        print(f"x0: {x0}")
-        print(f"x_ref shape: {x_ref.shape}")
-        print(f"contact_schedule shape: {contact_schedule.shape}")
-        
-        # Print cost matrices
-        print("\nCost Setup:")
-        print(f"Q matrix shape: {self.Q.shape}")  # Add self.Q as class variable
-        print(f"R matrix shape: {self.R.shape}")  # Add self.R as class variable
-
-        # Setup QP solver with more detailed options
         opts = {
-            'verbose': True,  # Enable for debugging
-            'osqp': {
-                'verbose': True,
-                'eps_abs': 1e-2,        # Increase tolerance
-                'eps_rel': 1e-2,        # Increase tolerance
-                'max_iter': 4000,
-                'warm_start': True,
-                'polish': True,         # Enable solution polishing
-                'adaptive_rho': True,
-                'adaptive_rho_interval': 25
-            }
+            'printLevel': 'none',
+            'print_time': 0,
+            'print_problem': 0,
+            'print_in': 0,
+            'print_out': 0,
+            "verbose": False,
         }
         
-        self.opti.solver('osqp', opts)
+        self.opti.solver('qpoases', opts)
 
         try:
-            # Set values and print bounds
-            print("\nSetting parameter values...")
+            # Set values
             x0 = ca.DM(x0.tolist())
             x_ref = ca.DM(x_ref.tolist())
             contact_schedule = ca.DM(contact_schedule.tolist())
@@ -239,22 +225,20 @@ class ConvexMPC():
             self.opti.set_value(self.x_ref, x_ref)
             self.opti.set_value(self.contact_sched, contact_schedule)
 
-            print("Setting foot positions:")
-            print(f"Number of timesteps: {len(foot_positions)}")
-            print(f"Number of feet: {len(foot_positions[0])}")
-
-            for k in range(self.params.horizon_steps):
-                for i in range(4):
-                    self.opti.set_value(self.foot_positions[k][i], foot_positions[k][i])
+            
+            self.opti.set_value(self.foot_positions, foot_positions)
             
             print("\nAttempting to solve...")
             sol = self.opti.solve()
             
-            # Print solution status
-            print(f"\nSolution status: {sol.stats()}")
-            
             forces = sol.value(self.U)[:, 0]
-            print(f"Optimal forces: {forces}")
+            #print(f"Optimal forces: {forces}")
+            print("\nMPC Forces Debug:")
+            # First print raw forces
+            print(f"Raw force vector: {forces}")
+            # Then print per leg
+            for i in range(4):
+                print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
             
             return forces
 
@@ -263,12 +247,37 @@ class ConvexMPC():
             import traceback
             traceback.print_exc()
             
-            # Print current variable values
-            try:
-                print("\nCurrent variable values:")
-                print(f"X: {self.opti.debug.value(self.X)}")
-                print(f"U: {self.opti.debug.value(self.U)}")
-            except:
-                print("Could not print debug values")
+            # # Print current variable values
+            # try:
+            #     print("\nCurrent variable values:")
+            #     print(f"X: {self.opti.debug.value(self.X)}")
+            #     print(f"U: {self.opti.debug.value(self.U)}")
+            # except:
+            #     print("Could not print debug values")
                 
             return None
+        
+
+def matrix_exp(A, order=6):
+    """
+    Symbolic matrix exponential using Padé approximation
+    A: Input matrix
+    order: Order of Padé approximation (higher = more accurate)
+    """
+    n = A.shape[0]
+    I = ca.DM.eye(n)
+    A_powers = [I]
+    A_current = I
+    factorial = 1
+    
+    # Compute Taylor series terms
+    for i in range(1, order + 1):
+        factorial *= i
+        A_current = A_current @ A
+        A_powers.append(A_current / factorial)
+    
+    # Padé approximation
+    N = sum(A_powers[i] for i in range(0, order + 1, 2))
+    D = sum(A_powers[i] for i in range(1, order + 1, 2))
+    
+    return (I + D) @ ca.inv(I - D)

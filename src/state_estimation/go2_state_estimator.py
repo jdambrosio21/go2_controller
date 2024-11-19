@@ -25,6 +25,9 @@ class Go2StateEstimator:
         # Init subscribers/ handlers()
         self.low_sub.Init(self.low_state_callback, 10)
         self.high_sub.Init(self.high_state_callback, 10)
+        # Allow time for first messages to arrive
+        time.sleep(0.5)  # Wait 500ms to ensure initial state messages are received
+
 
         # Define leg indices 
         self.leg_indices = {
@@ -55,7 +58,7 @@ class Go2StateEstimator:
         """
         if self.low_state is None or self.high_state is None:
             print("No state received yet")
-            return None, None, None
+            return None, None
         
         try:
             print("Received state:")
@@ -72,29 +75,22 @@ class Go2StateEstimator:
             q[5] = float(quat[3])  # z
             q[6] = float(quat[0])  # w
 
-            # joint_index = 7 # Start after base state
-            # for leg in self.leg_indices:
-            #     for motor_id in leg:
-            #         q[joint_index] = self.low_state.motor_state[motor_id].q
-            #         dq[joint_index-1] = self.low_state.motor_state[motor_id].dq  # -1 because dq has 6 base states
-            #         joint_index += 1
-            # Joint positions - following their example
             # FR
-            q[7] = self.low_state.motor_state[go2.LegID["FR_0"]].q
-            q[8] = self.low_state.motor_state[go2.LegID["FR_1"]].q
-            q[9] = self.low_state.motor_state[go2.LegID["FR_2"]].q
+            q[7] = self.low_state.motor_state[go2.LegID["FL_0"]].q
+            q[8] = self.low_state.motor_state[go2.LegID["FL_1"]].q
+            q[9] = self.low_state.motor_state[go2.LegID["FL_2"]].q
             # FL
-            q[10] = self.low_state.motor_state[go2.LegID["FL_0"]].q
-            q[11] = self.low_state.motor_state[go2.LegID["FL_1"]].q
-            q[12] = self.low_state.motor_state[go2.LegID["FL_2"]].q
+            q[10] = self.low_state.motor_state[go2.LegID["FR_0"]].q
+            q[11] = self.low_state.motor_state[go2.LegID["FR_1"]].q
+            q[12] = self.low_state.motor_state[go2.LegID["FR_2"]].q
             # RR
-            q[13] = self.low_state.motor_state[go2.LegID["RR_0"]].q
-            q[14] = self.low_state.motor_state[go2.LegID["RR_1"]].q
-            q[15] = self.low_state.motor_state[go2.LegID["RR_2"]].q
+            q[13] = self.low_state.motor_state[go2.LegID["RL_0"]].q
+            q[14] = self.low_state.motor_state[go2.LegID["RL_1"]].q
+            q[15] = self.low_state.motor_state[go2.LegID["RL_2"]].q
             # RL
-            q[16] = self.low_state.motor_state[go2.LegID["RL_0"]].q
-            q[17] = self.low_state.motor_state[go2.LegID["RL_1"]].q
-            q[18] = self.low_state.motor_state[go2.LegID["RL_2"]].q
+            q[16] = self.low_state.motor_state[go2.LegID["RR_0"]].q
+            q[17] = self.low_state.motor_state[go2.LegID["RR_1"]].q
+            q[18] = self.low_state.motor_state[go2.LegID["RR_2"]].q
 
             dq = np.zeros(18)
             dq[0:3] = self.high_state.velocity
@@ -102,35 +98,21 @@ class Go2StateEstimator:
 
             # Joint velocities
             # FR
-            dq[6] = self.low_state.motor_state[go2.LegID["FR_0"]].dq
-            dq[7] = self.low_state.motor_state[go2.LegID["FR_1"]].dq
-            dq[8] = self.low_state.motor_state[go2.LegID["FR_2"]].dq
+            dq[6] = self.low_state.motor_state[go2.LegID["FL_0"]].dq
+            dq[7] = self.low_state.motor_state[go2.LegID["FL_1"]].dq
+            dq[8] = self.low_state.motor_state[go2.LegID["FL_2"]].dq
             # FL
-            dq[9] = self.low_state.motor_state[go2.LegID["FL_0"]].dq
-            dq[10] = self.low_state.motor_state[go2.LegID["FL_1"]].dq
-            dq[11] = self.low_state.motor_state[go2.LegID["FL_2"]].dq
+            dq[9] = self.low_state.motor_state[go2.LegID["FR_0"]].dq
+            dq[10] = self.low_state.motor_state[go2.LegID["FR_1"]].dq
+            dq[11] = self.low_state.motor_state[go2.LegID["FR_2"]].dq
             # RR
-            dq[12] = self.low_state.motor_state[go2.LegID["RR_0"]].dq
-            dq[13] = self.low_state.motor_state[go2.LegID["RR_1"]].dq
-            dq[14] = self.low_state.motor_state[go2.LegID["RR_2"]].dq
+            dq[12] = self.low_state.motor_state[go2.LegID["RL_0"]].dq
+            dq[13] = self.low_state.motor_state[go2.LegID["RL_1"]].dq
+            dq[14] = self.low_state.motor_state[go2.LegID["RL_2"]].dq
             # RL
-            dq[15] = self.low_state.motor_state[go2.LegID["RL_0"]].dq
-            dq[16] = self.low_state.motor_state[go2.LegID["RL_1"]].dq
-            dq[17] = self.low_state.motor_state[go2.LegID["RL_2"]].dq
-
-                
-
-            # joint_angles = []
-            # joint_velocities = []
-            # for leg in ["FL", "FR", "BL", "BR"]:
-            #     for i in self.leg_indices:
-            #         joint_angles.append(self.low_state.motor_state[i].q)
-            #         joint_velocities.append(self.low_state.motor_state[i].dq)
-
-            # q[7:] = joint_angles
-
-            
-            # dq[6:] = joint_velocities
+            dq[15] = self.low_state.motor_state[go2.LegID["RR_0"]].dq
+            dq[16] = self.low_state.motor_state[go2.LegID["RR_1"]].dq
+            dq[17] = self.low_state.motor_state[go2.LegID["RR_2"]].dq
 
             return q, dq
         

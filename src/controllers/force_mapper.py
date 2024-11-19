@@ -6,17 +6,43 @@ class ForceMapper:
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
 
-        # Control gains
-        self.Kp = np.diag([100, 100, 100])  # Position gains
-        self.Kd = np.diag([10, 10, 10])     # Velocity gains
-
-        # Store foot frame ids
-        self.foot_frames = {
-            'FL': self.model.getFrameId("FL_foot"),
-            'FR': self.model.getFrameId("FR_foot"),
-            'RL': self.model.getFrameId("RL_foot"),
-            'RR': self.model.getFrameId("RR_foot")
+        # Setup foot frame IDs
+        self.foot_frame_ids = {
+            'FR': self.model.getFrameId('FR_foot'),
+            'FL': self.model.getFrameId('FL_foot'),
+            'RR': self.model.getFrameId('RR_foot'),
+            'RL': self.model.getFrameId('RL_foot')
         }
+
+        # Match URDF joint ordering
+        self.leg_joint_indices = {
+            'FL': [0, 1, 2],    # FL_hip/thigh/calf are first
+            'FR': [3, 4, 5],    # FR_hip/thigh/calf second
+            'RL': [6, 7, 8],    # RL_hip/thigh/calf third
+            'RR': [9, 10, 11]   # RR_hip/thigh/calf last
+        }
+
+        # Control gains
+        # Stance gains should be zero (MPC handles this)
+        self.Kp_stance = np.zeros((3,3))
+        self.Kd_stance = np.zeros((3,3))
+
+        # Swing gains should be high for tracking
+        self.Kp_swing = np.diag([700, 700, 150])  # Position gains
+        self.Kd_swing = np.diag([70, 70, 70])     # Velocity gains
+
+        # Maximum torque limit (from Go2 Specifications)
+        self.tau_max = 45.0  # Nm
+
+    def get_rotation_matrix(self, q):
+        """Get rotation matrix from base frame to world frame"""
+        # Update pinocchio model
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        
+        # Get base rotation matrix (world_R_body)
+        R = self.data.oMi[0].rotation  # Using frame 0 the base/floating joint
+        return R
 
     def compute_swing_torques(self, leg_id, q, v, p_ref, v_ref, a_ref):
         """Compute torques for swing leg control"""
@@ -28,24 +54,27 @@ class ForceMapper:
         pin.computeCoriolisMatrix(self.model, self.data, q, v)
         pin.computeGeneralizedGravity(self.model, self.data, q)
 
+        # Get current foot position and velocity
+        frame_id = self.foot_frame_ids[leg_id]
+        p = self.data.oMf[frame_id].translation
+        
+
         # Get Jacobian (Translational)
         J = pin.getFrameJacobian(self.model, self.data, 
-                                 self.foot_frames[leg_id], 
+                                 self.foot_frame_ids[leg_id], 
                                  pin.ReferenceFrame.LOCAL)[:3, :] 
         
-        # Get current foot position and velocity
-        p = pin.getFramePosition(self.model, self.data, self.foot_frames[leg_id])
         v_current = J @ v
 
         # Compute operational space inertia matrix
         Lambda = np.linalg.inv(J @ np.linalg.inv(self.data.M) @ J.T)
 
         # Compute feedback term
-        feedback = J.T @ (self.Kp @ (p_ref - p) + self.Kd @ (v_ref - v_current))
+        feedback = J.T @ (self.Kp_swing @ (p_ref - p) + self.Kd_swing @ (v_ref - v_current))
 
         # Compute feedforward term
-        J_dot_q_dot = pin.getFrameAcceleration(self.model, self.data, 
-                                              self.foot_frames[leg_id]).linear
+        J_dot_q_dot = pin.getFrameClassicalAcceleration(self.model, self.data, 
+                                              self.foot_frame_ids[leg_id]).linear
         C = self.data.C
         G = self.data.g
         
@@ -53,23 +82,42 @@ class ForceMapper:
         
         # Total torque
         tau = feedback + tau_ff
-        return tau
-    
-    def compute_stance_torques(self, leg_id, q, force, R):
-        """Computes torques for stance leg control"""
 
-        # Update model
+        return np.clip(tau, -self.tau_max, self.tau_max)
+    
+    def compute_stance_torques(self, leg_id: str, q: np.ndarray, force: np.ndarray):
+        """Compute torques for stance leg"""
+        # print(f"\nForce Mapper Debug for {leg_id}:")
+        # print(f"Input force components: {force}")  # Check force ordering
+        # print(f"Pinocchio frame ID: {self.foot_frame_ids[leg_id]}")
+        
+        # Update kinematics
         pin.computeJointJacobians(self.model, self.data, q)
         pin.updateFramePlacements(self.model, self.data)
 
+        # Get rotation matrix from base to world
+        R = self.get_rotation_matrix(q)
+        
+        
         # Get Jacobian
-        J = pin.getJointJacobian(self.model, self.data, 
-                                 self.foot_frames[leg_id], 
-                                 pin.ReferenceFrame.LOCAL)[:3, :]
+        frame_id = self.foot_frame_ids[leg_id]
+        J_full = pin.getFrameJacobian(
+            self.model, self.data,
+            frame_id,
+            pin.ReferenceFrame.LOCAL
+        )[:3, :]
+        # print(f"Full Jacobian shape: {J_full.shape}")
+        
+        # Get columns for this leg
+        joint_ids = self.leg_joint_indices[leg_id]
+        J = J_full[:, joint_ids]
+        # print(f"Leg Jacobian shape: {J.shape}")
+        # print(f"Leg joint indices: {joint_ids}")
         
         # Compute torques
         tau = J.T @ R.T @ force
-        return tau
+    
+        return np.clip(tau, -self.tau_max, self.tau_max)
     
     def compute_leg_torques(self, leg_id, q, v, mode, **kwargs):
         """
@@ -83,23 +131,26 @@ class ForceMapper:
             if not all(arg in kwargs for arg in required_args):
                 raise ValueError(f"Swing mode requires {required_args}")
             
-            return self.compute_swing_torques(
+            tau = self.compute_swing_torques(
                 leg_id, q, v,
                 kwargs['p_ref'],
                 kwargs['v_ref'],
                 kwargs['a_ref']
             )
+            
+            return tau
         
         elif mode == 'stance':
             required_args = ['force', 'R']
             if not all(arg in kwargs for arg in required_args):
                 raise ValueError(f"Stance mode requires {required_args}")
                 
-            return self.compute_stance_torques(
+            tau = self.compute_stance_torques(
                 leg_id, q,
-                kwargs['force'],
-                kwargs['R']
+                kwargs['force']
             )
+        
+            return tau
             
         else:
             raise ValueError(f"Unknown mode: {mode}")

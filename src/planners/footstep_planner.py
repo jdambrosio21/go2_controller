@@ -4,25 +4,23 @@ from planners.gait_scheduler import GaitScheduler
 from quadruped import Quadruped
 
 class FootstepPlanner:
-    def __init__(self, k_raibert = 0.03):
+    def __init__(self, urdf_path: str, k_raibert = 0.03):
       self.n_legs = 4
       self.k_raibert = k_raibert
       self.next_footholds = np.zeros((4, 3))
-      self.quadruped = Quadruped()
+      self.quadruped = Quadruped(urdf_path)
 
     def plan_footsteps(self, 
                        com_state: tuple[np.ndarray, np.ndarray, np.ndarray], 
                        desired_vel: np.ndarray, 
-                       robot_model,
                        q_current: np.ndarray, 
                        gait_scheduler: GaitScheduler) -> np.ndarray:
         """
         Plan footsteps using Raibert Heuristic
 
-        Params:
+        Args:
             com_state: Current CoM Pos, Vel, and Yaw
             desired_vel: Desired CoM Velocity from the reference trajectory
-            robot_model: Pinocchio robot model
             q_current: current robot configuration
             gait_scheduler: Gait Scheduler to define gait info
         

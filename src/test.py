@@ -12,21 +12,18 @@ from unitree_sdk2py.utils.crc import CRC
 
 # Implemented classes
 from controllers.convex_mpc import ConvexMPC, MPCParams
-from planners.gait_scheduler import GaitScheduler
 from controllers.force_mapper import ForceMapper
+from planners.gait_scheduler import GaitScheduler
+from planners.footstep_planner import FootstepPlanner
+from planners.foot_swing_trajectory import FootSwingTrajectory
 from state_estimation.go2_state_estimator import Go2StateEstimator
+from state_estimation import unitree_legged_const as go2
 from quadruped import Quadruped
 
 class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize robot model and estimator
         self.robot = Quadruped(urdf_path)
-
-        # # Initialize communication
-        # if len(sys.argv) < 2:
-        #     ChannelFactoryInitialize(1, "lo")
-        # else:
-        #     ChannelFactoryInitialize(0, sys.argv[1])
             
         self.pub = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.pub.Init()
@@ -38,6 +35,12 @@ class Go2Controller:
 
         self.state_estimator = Go2StateEstimator()
 
+        # Initialize gait scheduler
+        self.gait_scheduler = GaitScheduler(total_period=0.2, gait_type="trot")  # Or whatever gait
+
+        # Initialize Footstep Planner
+        self.footstep_planner = FootstepPlanner(urdf_path)
+
         # Initialize MPC
         mpc_params = MPCParams(
             mass=self.robot.mass,
@@ -45,6 +48,10 @@ class Go2Controller:
             dt=0.002  # 500Hz
         )
         self.mpc = ConvexMPC(mpc_params)
+
+        # Initialize Foot swing Trajectory Generator
+        #fself.footswing_traj = FootSwingTrajectory()
+        self.swing_trajectories = {leg: None for leg in ["FL", "FR", "RL", "RR"]}
         
         # Initialize force mapper
         self.force_mapper = ForceMapper(urdf_path)
@@ -136,19 +143,63 @@ class Go2Controller:
             
             if q is None or dq is None:
                 print("Waiting for valid state...")
+                time.sleep(0.01)  # Sleep for 10ms and retry
                 return  # Just return and try again next cycle
+            
+            # Init reference traj
+            x_ref = self._create_reference_trajectory(q, np.array([2, 0, 0]))
+            #x_ref = self._create_stance_ref()
 
+            
+            # Update gait
+            self.gait_scheduler.update(self.dt)
+
+            # Get contact schedules and states
+            contact_state = self.gait_scheduler.get_current_contact_state()
+            contact_schedule = self.gait_scheduler.predict_horizon_contact_state(
+                dt=self.mpc.params.dt,
+                horizon_length=self.mpc.params.horizon_steps
+            )
+            
             # Get foot positions using Pinocchio method
+            # NOTE: May be more stable and robust to disturbances if we get the
+            # foot position directly from Go2?
             foot_position = self.robot.get_foot_positions(q)
-            
-            # Create contact schedule for full horizon
-            horizon_steps = self.mpc.params.horizon_steps
-            contact_schedule = np.ones((4, horizon_steps))
-            
-            # Create foot positions for horizon
-            foot_pos_horizon = []
-            for _ in range(horizon_steps):
-                foot_pos_horizon.append(foot_position) # assume same foot position across horizon to start
+
+            # Plan footsteps for next swing legs
+            next_footholds = self.footstep_planner.plan_footsteps(
+                com_state=(q[0:3], dq[0:3]),
+                desired_vel=x_ref[6:9, 0],
+                q_current=q,
+                gait_scheduler=self.gait_scheduler
+            )
+
+            # Update swing trajectories for current swing legs
+            for leg_idx, leg in enumerate(["FL", "FR", "RL", "RR"]):
+                if contact_state[leg_idx] == 0: # In swing
+                    if self.swing_trajectories[leg] is None:
+                        self.swing_trajectories[leg] = FootSwingTrajectory(
+                            p0=foot_position[leg_idx],
+                            pf=next_footholds[leg_idx],
+                            height=0.05
+                        )
+
+                    phase = self.gait_scheduler.get_swing_phase(leg_idx)
+                    swing_duration = self.gait_scheduler.get_swing_duration()
+                    self.swing_trajectories[leg].compute_swing_trajectory_bezier(phase, swing_duration)
+                else:
+                    self.swing_trajectories[leg] = None # In stance
+
+            # Create foot positions for MPC horizon
+            foot_pos_horizon = np.zeros((12, self.mpc.params.horizon_steps))
+            for k in range(self.mpc.params.horizon_steps):
+                for leg in range(4):
+                    if contact_schedule[leg, k] == 1:
+                        # Foot in stance
+                        foot_pos_horizon[(leg*3):(leg+1)*3, k] = foot_position[leg]
+                    else:
+                        # Foot in swing
+                        foot_pos_horizon[(leg*3):(leg+1)*3, k] = foot_position[leg]
             
             # 2. Run MPC
             x0 = np.concatenate([
@@ -162,33 +213,79 @@ class Go2Controller:
             
             mpc_forces = self.mpc.solve(
                 x0=x0,
-                x_ref=self._create_stance_ref(),
+                x_ref=x_ref,
                 contact_schedule=contact_schedule,
                 foot_positions=foot_pos_horizon
             )
+
+            # Define motor ID mapping for each leg
+            leg_motor_map = {
+                "FL": [0, 1, 2],
+                "FR": [3, 4, 5],
+                "RL": [6, 7, 8],
+                "RR": [9, 10, 11]
+            }
+        
             
-            # 3. Map forces to torques
-            for i, leg in enumerate(["FR", "FL", "RR", "RL"]):
-                force = mpc_forces[i*3:(i+1)*3]
-                tau = self.force_mapper.compute_leg_torques(
-                    leg_id=leg,
-                    q=q,
-                    mode='stance',
-                    force=force,
-                    R=np.eye(3)
-                )
+            # print("\nDebug MPC -> Motor Mapping")
+            # Calculate all torques first
+            q_joints = q[7:]
+            dq_joints = dq[6:]
+            
+            # Initialize torque array for all 12 motors
+            all_torques = np.zeros(12)
+            
+            # Calculate torques for all legs at once
+            for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
+                # print(f"\n{leg}:")
+                motor_ids = leg_motor_map[leg]
+                # print(f"Motor IDs: {motor_ids}")
                 
-                # Send to motors
-                indices = self._get_leg_indices(leg)
-                for j, idx in enumerate(indices):
-                    self.cmd.motor_cmd[idx].mode = 0x01  # Torque control
-                    self.cmd.motor_cmd[idx].tau = tau[j]
-                    self.cmd.motor_cmd[idx].kp = 0
-                    self.cmd.motor_cmd[idx].kd = 0
+                if contact_state[i] == 1:  # Leg in stance
+                    force = mpc_forces[i*3:(i+1)*3]
+                    # print(f"Using force: {force}")
+                    leg_torques = self.force_mapper.compute_leg_torques(
+                        leg_id=leg, q=q_joints, v=dq_joints,
+                        mode='stance', force=force, R=np.eye(3)
+                    )
+                else:  # Leg in swing
+                    if self.swing_trajectories[leg] is None:
+                        current_pos = foot_position[i]
+                        target_pos = next_footholds[i]
+                        
+                        self.swing_trajectories[leg] = FootSwingTrajectory(
+                            p0=current_pos,
+                            pf=target_pos,
+                            height=0.1
+                        )
+                    
+                    traj = self.swing_trajectories[leg]
+                    if traj is None:
+                        print(f"Warning: No trajectory for {leg} in swing")
+                        continue
+                        
+                    leg_torques = self.force_mapper.compute_leg_torques(
+                        leg_id=leg, q=q_joints, v=dq_joints,
+                        mode='swing',
+                        p_ref=traj.p, v_ref=traj.v, a_ref=traj.a
+                    )
+                
+                # print(f"Computed torques: {leg_torques}")
+                # Store torques in the complete array using correct motor IDs
+                for j in range(3):
+                    all_torques[motor_ids[j]] = leg_torques[j]
             
+            # Send a single command with all torques
+            # print("\nSending unified command for all motors...")
+            for i in range(12):
+                self.cmd.motor_cmd[i].mode = 0x01
+                self.cmd.motor_cmd[i].tau = all_torques[i]
+                self.cmd.motor_cmd[i].kp = 1.0
+                self.cmd.motor_cmd[i].kd = 0.0
+                
             self.cmd.crc = self.crc.Crc(self.cmd)
             self.pub.Write(self.cmd)
-
+                    
         except Exception as e:
             print(f"Control loop failed: {e}")
             import traceback
@@ -200,14 +297,30 @@ class Go2Controller:
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
         x_ref[2, :] = 0.3  # Desired COM height
         return x_ref
+    
+    def _create_reference_trajectory(self, current_state, desired_vel):
+        """Create simple reference trajectory"""
+        x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
+
+        for k in range(self.mpc.params.horizon_steps + 1):
+            # Simple ref: constant desired velocity
+            x_ref[:, k] = np.concatenate([
+                current_state[0:3] + desired_vel * k * self.mpc.params.dt,
+                np.zeros(3),
+                desired_vel,
+                np.zeros(3),
+                [9.81]
+            ])
+
+        return x_ref
 
     def _get_leg_indices(self, leg: str) -> List[int]:
         """Get motor indices for given leg"""
         indices = {
-            "FR": [0, 1, 2],
-            "FL": [3, 4, 5],
-            "RR": [6, 7, 8],
-            "RL": [9, 10, 11]
+            "FL": [0, 1, 2],
+            "FR": [3, 4, 5],
+            "RL": [6, 7, 8],
+            "RR": [9, 10, 11]
         }
         return indices[leg]
 
@@ -224,4 +337,6 @@ if __name__ == "__main__":
     input("Press enter to start")  # Like in working example
     
     controller = Go2Controller("/home/parallels/go2_controller/robots/go2_description/xacro/go2_generated.urdf")
+
+    
     controller.run()
