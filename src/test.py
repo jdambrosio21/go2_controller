@@ -36,7 +36,7 @@ class Go2Controller:
         self.state_estimator = Go2StateEstimator()
 
         # Initialize gait scheduler
-        self.gait_scheduler = GaitScheduler(total_period=0.2, gait_type="trot")  # Or whatever gait
+        self.gait_scheduler = GaitScheduler(total_period=0.002, gait_type="trot")  # Or whatever gait
 
         # Initialize Footstep Planner
         self.footstep_planner = FootstepPlanner(urdf_path)
@@ -45,7 +45,7 @@ class Go2Controller:
         mpc_params = MPCParams(
             mass=self.robot.mass,
             I_body=self.robot.inertia,
-            dt=0.002  # 500Hz
+            dt=0.0333  # 30hz
         )
         self.mpc = ConvexMPC(mpc_params)
 
@@ -147,7 +147,7 @@ class Go2Controller:
                 return  # Just return and try again next cycle
             
             # Init reference traj
-            x_ref = self._create_reference_trajectory(q, np.array([2, 0, 0]))
+            x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
             #x_ref = self._create_stance_ref()
 
             
@@ -166,9 +166,11 @@ class Go2Controller:
             # foot position directly from Go2?
             foot_position = self.robot.get_foot_positions(q)
 
+            rpy = self.robot.quat_to_rpy(q[3:7])
+
             # Plan footsteps for next swing legs
             next_footholds = self.footstep_planner.plan_footsteps(
-                com_state=(q[0:3], dq[0:3]),
+                com_state=(q[0:3], dq[0:3], rpy[-1]),
                 desired_vel=x_ref[6:9, 0],
                 q_current=q,
                 gait_scheduler=self.gait_scheduler
@@ -204,7 +206,7 @@ class Go2Controller:
             # 2. Run MPC
             x0 = np.concatenate([
                 q[0:3],     # position
-                self.robot.quat_to_rpy(q[3:7]),  # orientation
+                rpy,  # orientation
                 dq[0:3],    # linear velocity
                 dq[3:6],    # angular velocity
                 [9.81]      # gravity
@@ -299,20 +301,40 @@ class Go2Controller:
         return x_ref
     
     def _create_reference_trajectory(self, current_state, desired_vel):
-        """Create simple reference trajectory"""
+        """Create linear reference trajectory for MPC horizon
+        
+        Args:
+            current_state: Current robot state [13]
+            desired_vel: Desired velocity [3] - e.g. [0.5, 0, 0] for 0.5 m/s forward
+        """
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
 
-        for k in range(self.mpc.params.horizon_steps + 1):
-            # Simple ref: constant desired velocity
-            x_ref[:, k] = np.concatenate([
-                current_state[0:3] + desired_vel * k * self.mpc.params.dt,
-                np.zeros(3),
-                desired_vel,
-                np.zeros(3),
-                [9.81]
-            ])
+        # Set initial position to current position
+        x_ref[0:3, 0] = current_state[0:3]  # Starting COM position
+        
+        # Set desired height
+        desired_height = 0.3  # Or whatever your nominal height is
+        x_ref[2, :] = desired_height  # Maintain constant height
+        
+        # Propagate position linearly based on desired velocity
+        for k in range(1, self.mpc.params.horizon_steps + 1):
+            dt = k * self.mpc.params.dt
+            x_ref[0:3, k] = current_state[0:3] + desired_vel * dt
+        
+        # Set desired velocities (constant)
+        x_ref[6:9, :] = np.tile(desired_vel.reshape(3,1), (1, self.mpc.params.horizon_steps + 1))
+        
+        # Set gravity state
+        x_ref[12, :] = 9.81
+
+        # Debug print
+        print("\nReference Trajectory Debug:")
+        print(f"Initial position: {x_ref[0:3, 0]}")
+        print(f"Final position: {x_ref[0:3, -1]}")
+        print(f"Desired velocity: {desired_vel}")
 
         return x_ref
+
 
     def _get_leg_indices(self, leg: str) -> List[int]:
         """Get motor indices for given leg"""

@@ -7,7 +7,7 @@ from typing import List, Optional
 @dataclass
 class MPCParams:
     """Parameters for MPC"""
-    dt: float = 0.02            # Timestep
+    dt: float = 0.0333            # Timestep
     horizon_steps: int = 10     # Length of horizon
 
     # Robot params
@@ -76,7 +76,7 @@ class ConvexMPC():
         #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
         #     0  # gravity state
         # ])
-        self.Q = ca.diag([100,100,0,0,0,100,1,1,1,1,1,1,0]) 
+        self.Q = ca.diag([100,100,100,0,0,100,1,1,1,1,1,1,0]) 
         
         self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
@@ -175,18 +175,52 @@ class ConvexMPC():
 
                 # Add force constraints for each foot in contact
                 # Enforce vertical (z) force constraints for stance phase
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[2] >= self.params.f_min)
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[2] <= self.params.f_max)
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[2] >= self.params.f_min)
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[2] <= self.params.f_max)
 
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[0] >= -self.params.mu * f_i[2]) # Fx >= -mu Fz
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[0] <= self.params.mu * f_i[2]) # Fx <= mu Fz
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[0] >= -self.params.mu * f_i[2]) # Fx >= -mu Fz
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[0] <= self.params.mu * f_i[2]) # Fx <= mu Fz
 
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[1] >= -self.params.mu * f_i[2]) # Fy >= -mu Fz
-                self.opti.subject_to(self.contact_sched[i, k] * f_i[1] <= self.params.mu * f_i[2]) # Fy <= mu Fz
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[1] >= -self.params.mu * f_i[2]) # Fy >= -mu Fz
+                # self.opti.subject_to(self.contact_sched[i, k] * f_i[1] <= self.params.mu * f_i[2]) # Fy <= mu Fz
+
+                # self.opti.subject_to(self.opti.bounded(self.params.f_min, self.contact_sched[i, k] * f_i[2], self.params.f_max))
+                # self.opti.subject_to(self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[0], self.params.mu * f_i[2]))
+                # self.opti.subject_to(self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[1], self.params.mu * f_i[2]))
 
 
-                # Force components must be zero when foot is not in contact
-                #self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i == 0)
+
+                # # Force components must be zero when foot is not in contact
+                # # Forces must be zero in swing
+                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[2] == 0)  # Z-force zero in swing
+                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[0] == 0)  # X-force zero in swing
+                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[1] == 0)  # Y-force zero in swing
+
+                # Apply vertical force constraint conditionally
+                self.opti.subject_to(
+                    f_i[2] >= ca.if_else(self.contact_sched[i, k] == 1, self.params.f_min, 0)
+                )
+                self.opti.subject_to(
+                    f_i[2] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.f_max, 0)
+                )
+
+                # Friction cone constraint
+                self.opti.subject_to(
+                    f_i[0] >= ca.if_else(self.contact_sched[i, k] == 1, -self.params.mu * f_i[2], 0)
+                )
+                self.opti.subject_to(
+                    f_i[0] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.mu * f_i[2], 0)
+                )
+                self.opti.subject_to(
+                    f_i[1] >= ca.if_else(self.contact_sched[i, k] == 1, -self.params.mu * f_i[2], 0)
+                )
+                self.opti.subject_to(
+                    f_i[1] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.mu * f_i[2], 0)
+                )
+
+                # Forces must be zero during swing phase
+                self.opti.subject_to(f_i == ca.if_else(self.contact_sched[i, k] == 1, f_i, [0, 0, 0]))
+
 
     def solve(self,
               x0: NDArray,
