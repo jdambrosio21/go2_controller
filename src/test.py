@@ -36,7 +36,7 @@ class Go2Controller:
         self.state_estimator = Go2StateEstimator()
 
         # Initialize gait scheduler
-        self.gait_scheduler = GaitScheduler(total_period=0.002, gait_type="trot")  # Or whatever gait
+        self.gait_scheduler = GaitScheduler(total_period=0.5, gait_type="trot")  # Or whatever gait
 
         # Initialize Footstep Planner
         self.footstep_planner = FootstepPlanner(urdf_path)
@@ -62,18 +62,26 @@ class Go2Controller:
         
         # Standing poses
         self.stand_up_joint_pos = np.array([
-            0.00571868, 0.608813, -1.21763,
-            -0.00571868, 0.608813, -1.21763,
-            0.00571868, 0.608813, -1.21763,
-            -0.00571868, 0.608813, -1.21763
+            0.00571868, 0.608813, -1.21763,     # FR
+            -0.00571868, 0.608813, -1.21763,    # FL
+            0.00571868, 0.608813, -1.21763,     # RR
+            -0.00571868, 0.608813, -1.21763     # RL
         ])
-        
+
         self.stand_down_joint_pos = np.array([
-            0.0473455, 1.22187, -2.44375,
-            -0.0473455, 1.22187, -2.44375,
-            0.0473455, 1.22187, -2.44375,
+            0.0473455, 1.22187, -2.44375, 
+            -0.0473455, 1.22187, -2.44375, 
+            0.0473455, 1.22187, -2.44375, 
             -0.0473455, 1.22187, -2.44375
         ])
+
+        
+        # Define in order for pinocchio
+        self.q_nom = np.zeros(12)
+        self.q_nom[0:3] = self.stand_up_joint_pos[3:6]  # FL
+        self.q_nom[3:6] = self.stand_up_joint_pos[0:3]  # FR
+        self.q_nom[6:9] = self.stand_up_joint_pos[9:]   # RL
+        self.q_nom[9:]  = self.stand_up_joint_pos[6:9]  # RR
 
         
     def initialize_command(self):
@@ -168,22 +176,18 @@ class Go2Controller:
 
             rpy = self.robot.quat_to_rpy(q[3:7])
 
-            # Plan footsteps for next swing legs
-            next_footholds = self.footstep_planner.plan_footsteps(
-                com_state=(q[0:3], dq[0:3], rpy[-1]),
-                desired_vel=x_ref[6:9, 0],
-                q_current=q,
-                gait_scheduler=self.gait_scheduler
-            )
+            # Plan current next footsteps for swing legs
+            next_footholds = self.footstep_planner.plan_current_footsteps(dq[0:3], x_ref[6:9, 0], q, self.gait_scheduler)
+
 
             # Update swing trajectories for current swing legs
             for leg_idx, leg in enumerate(["FL", "FR", "RL", "RR"]):
                 if contact_state[leg_idx] == 0: # In swing
                     if self.swing_trajectories[leg] is None:
                         self.swing_trajectories[leg] = FootSwingTrajectory(
-                            p0=foot_position[leg_idx],
-                            pf=next_footholds[leg_idx],
-                            height=0.05
+                            p0=foot_position[leg_idx, :],
+                            pf=next_footholds[leg_idx, :],
+                            height=0.1
                         )
 
                     phase = self.gait_scheduler.get_swing_phase(leg_idx)
@@ -192,16 +196,10 @@ class Go2Controller:
                 else:
                     self.swing_trajectories[leg] = None # In stance
 
-            # Create foot positions for MPC horizon
-            foot_pos_horizon = np.zeros((12, self.mpc.params.horizon_steps))
-            for k in range(self.mpc.params.horizon_steps):
-                for leg in range(4):
-                    if contact_schedule[leg, k] == 1:
-                        # Foot in stance
-                        foot_pos_horizon[(leg*3):(leg+1)*3, k] = foot_position[leg]
-                    else:
-                        # Foot in swing
-                        foot_pos_horizon[(leg*3):(leg+1)*3, k] = foot_position[leg]
+            # Plan footholds for MPC Horizon
+            foot_pos_horizon = self.footstep_planner.plan_horizon_footsteps(self.mpc.params.dt, self.mpc.params.horizon_steps, x_ref, self.q_nom, self.gait_scheduler)
+            
+            print(foot_pos_horizon)
             
             # 2. Run MPC
             x0 = np.concatenate([
@@ -210,80 +208,49 @@ class Go2Controller:
                 dq[0:3],    # linear velocity
                 dq[3:6],    # angular velocity
                 [9.81]      # gravity
-            ])
+            ])         
             
-            
-            mpc_forces = self.mpc.solve(
-                x0=x0,
-                x_ref=x_ref,
-                contact_schedule=contact_schedule,
-                foot_positions=foot_pos_horizon
-            )
-
-            # Define motor ID mapping for each leg
-            leg_motor_map = {
-                "FL": [0, 1, 2],
-                "FR": [3, 4, 5],
-                "RL": [6, 7, 8],
-                "RR": [9, 10, 11]
-            }
-        
-            
-            # print("\nDebug MPC -> Motor Mapping")
-            # Calculate all torques first
+            mpc_forces = self.mpc.solve(x0, x_ref, contact_schedule, foot_pos_horizon)
             q_joints = q[7:]
             dq_joints = dq[6:]
-            
-            # Initialize torque array for all 12 motors
-            all_torques = np.zeros(12)
-            
-            # Calculate torques for all legs at once
+            torques = np.zeros(12)
+
+            # For each leg, calculate the torques to be applied from the MPC output
             for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
-                # print(f"\n{leg}:")
-                motor_ids = leg_motor_map[leg]
-                # print(f"Motor IDs: {motor_ids}")
+                # Get the force for leg i
+                force = mpc_forces[i*3:(i+1)*3] # xyz for each leg
+
+                # Check if leg is in stance or swing
+                if contact_state[i] == 1: # In stance
+                    # Use stance torque control
+                    torque = self.force_mapper.compute_leg_torques(leg, q_joints, dq_joints, 'stance', force=force)
+                    # Do i apply the torque now? or all at once
+                    torques[i*3:(i+1)*3] = torque
                 
-                if contact_state[i] == 1:  # Leg in stance
-                    force = mpc_forces[i*3:(i+1)*3]
-                    # print(f"Using force: {force}")
-                    leg_torques = self.force_mapper.compute_leg_torques(
-                        leg_id=leg, q=q_joints, v=dq_joints,
-                        mode='stance', force=force, R=np.eye(3)
-                    )
-                else:  # Leg in swing
-                    if self.swing_trajectories[leg] is None:
-                        current_pos = foot_position[i]
-                        target_pos = next_footholds[i]
-                        
-                        self.swing_trajectories[leg] = FootSwingTrajectory(
-                            p0=current_pos,
-                            pf=target_pos,
-                            height=0.1
-                        )
-                    
+                else: # In swing
+                    self.swing_trajectories[leg] = FootSwingTrajectory(foot_position[i], next_footholds[i], 0.1)
                     traj = self.swing_trajectories[leg]
-                    if traj is None:
-                        print(f"Warning: No trajectory for {leg} in swing")
-                        continue
-                        
-                    leg_torques = self.force_mapper.compute_leg_torques(
-                        leg_id=leg, q=q_joints, v=dq_joints,
-                        mode='swing',
-                        p_ref=traj.p, v_ref=traj.v, a_ref=traj.a
-                    )
-                
-                # print(f"Computed torques: {leg_torques}")
-                # Store torques in the complete array using correct motor IDs
-                for j in range(3):
-                    all_torques[motor_ids[j]] = leg_torques[j]
-            
+
+                    # Calc torque to track swing traj
+                    torque = self.force_mapper.compute_leg_torques(leg, q_joints, dq_joints, 'swing', 
+                                             p_ref=traj.p, 
+                                             v_ref=traj.v, 
+                                             a_ref=traj.a)
+                    torques[i*3:(i+1)*3] = torque
+
+            #Re order torques for unitree order
+            go2_torques = np.zeros(12)
+            go2_torques[0:3] = torques[3:6]
+            go2_torques[3:6] = torques[0:3]
+            go2_torques[6:9] = torques[9:]
+            go2_torques[9:] = torques[6:9]
             # Send a single command with all torques
             # print("\nSending unified command for all motors...")
             for i in range(12):
                 self.cmd.motor_cmd[i].mode = 0x01
-                self.cmd.motor_cmd[i].tau = all_torques[i]
+                self.cmd.motor_cmd[i].tau = go2_torques[i]
                 self.cmd.motor_cmd[i].kp = 1.0
-                self.cmd.motor_cmd[i].kd = 0.0
+                self.cmd.motor_cmd[i].kd = 1.0
                 
             self.cmd.crc = self.crc.Crc(self.cmd)
             self.pub.Write(self.cmd)

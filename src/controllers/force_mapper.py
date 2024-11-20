@@ -32,7 +32,7 @@ class ForceMapper:
         self.Kd_swing = np.diag([70, 70, 70])     # Velocity gains
 
         # Maximum torque limit (from Go2 Specifications)
-        self.tau_max = 45.0  # Nm
+        self.tau_max = np.array([23.7, 23.7, 45.4])  # [hip, thigh, calf]
 
     def get_rotation_matrix(self, q):
         """Get rotation matrix from base frame to world frame"""
@@ -45,7 +45,12 @@ class ForceMapper:
         return R
 
     def compute_swing_torques(self, leg_id, q, v, p_ref, v_ref, a_ref):
-        """Compute torques for swing leg control"""
+        """
+        Compute torques for swing leg control
+
+        Returns:
+            torque: [3 x 1] vector of torques for each joint of the swing leg
+        """
 
         # Update model
         pin.computeJointJacobians(self.model, self.data, q)
@@ -60,14 +65,21 @@ class ForceMapper:
         
 
         # Get Jacobian (Translational)
-        J = pin.getFrameJacobian(self.model, self.data, 
+        J_full = pin.getFrameJacobian(self.model, self.data, 
                                  self.foot_frame_ids[leg_id], 
                                  pin.ReferenceFrame.LOCAL)[:3, :] 
         
-        v_current = J @ v
+        # Get columns for this leg's joints only
+        joint_ids = self.leg_joint_indices[leg_id]
+        J = J_full[:, joint_ids]  # Extract just this leg's columns
+        v_current = J @ v[joint_ids]  # Use just this leg's velocities
+
+        # Get mass matrix for just this leg
+        M_leg = self.data.M[joint_ids][:, joint_ids]
+    
 
         # Compute operational space inertia matrix
-        Lambda = np.linalg.inv(J @ np.linalg.inv(self.data.M) @ J.T)
+        Lambda = np.linalg.inv(J @ np.linalg.inv(M_leg) @ J.T)
 
         # Compute feedback term
         feedback = J.T @ (self.Kp_swing @ (p_ref - p) + self.Kd_swing @ (v_ref - v_current))
@@ -75,18 +87,27 @@ class ForceMapper:
         # Compute feedforward term
         J_dot_q_dot = pin.getFrameClassicalAcceleration(self.model, self.data, 
                                               self.foot_frame_ids[leg_id]).linear
+        
         C = self.data.C
         G = self.data.g
+
+        # Get the Coriolis and gravity terms for just this leg
+        C_leg = C[joint_ids, :][:, joint_ids]  # Extract leg's portion
+        G_leg = G[joint_ids]
         
-        tau_ff = J.T @ Lambda @ (a_ref - J_dot_q_dot) + C @ v + G
-        
-        # Total torque
+        # Compute feedforward with leg-specific terms
+        tau_ff = J.T @ Lambda @ (a_ref - J_dot_q_dot) + C_leg @ v[joint_ids] + G_leg
+
         tau = feedback + tau_ff
 
         return np.clip(tau, -self.tau_max, self.tau_max)
     
     def compute_stance_torques(self, leg_id: str, q: np.ndarray, force: np.ndarray):
-        """Compute torques for stance leg"""
+        """Compute torques for stance leg
+        
+            Returns:
+                torque: [3 x 1] vector of torques for each joint of the stance leg
+        """
         # print(f"\nForce Mapper Debug for {leg_id}:")
         # print(f"Input force components: {force}")  # Check force ordering
         # print(f"Pinocchio frame ID: {self.foot_frame_ids[leg_id]}")
@@ -141,7 +162,7 @@ class ForceMapper:
             return tau
         
         elif mode == 'stance':
-            required_args = ['force', 'R']
+            required_args = ['force']
             if not all(arg in kwargs for arg in required_args):
                 raise ValueError(f"Stance mode requires {required_args}")
                 

@@ -13,7 +13,7 @@ class MPCParams:
     # Robot params
     mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
-    mu: float = 0.04            # Friction Coeff.
+    mu: float = 1.0            # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
@@ -21,8 +21,8 @@ class MPCParams:
     f_max: float = 222.0          # Max vertical force
 
     # Weights for QP
-    w_position = 50.0       # Position tracking weight
-    w_orientation = 50.0    # Orientation tracking weight
+    w_position = 100.0       # Position tracking weight
+    w_orientation = 100.0    # Orientation tracking weight
     w_velocity = 1.0        # Velocity tracking weight 
     w_angular_vel = 1.0     # Angular velocity tracking weight
     w_force = 1e-6          # Minimize forces weight
@@ -269,7 +269,7 @@ class ConvexMPC():
             #print(f"Optimal forces: {forces}")
             print("\nMPC Forces Debug:")
             # First print raw forces
-            print(f"Raw force vector: {forces}")
+            #print(f"Raw force vector: {forces}")
             # Then print per leg
             for i in range(4):
                 print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
