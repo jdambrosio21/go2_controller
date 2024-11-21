@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from planners.gait_scheduler import GaitScheduler
-from quadruped import Quadruped
+from utils.quadruped import Quadruped
 
 class FootstepPlanner:
     def __init__(self, urdf_path: str, k_raibert = 0.03):

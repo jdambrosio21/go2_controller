@@ -13,12 +13,12 @@ class MPCParams:
     # Robot params
     mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
-    mu: float = 1.0            # Friction Coeff.
+    mu: float = 0.6           # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
-    f_min: float = 0.0          # Min vertical force
-    f_max: float = 222.0          # Max vertical force
+    f_min: float = 10.0          # Min vertical force
+    f_max: float = 232.0          # Max vertical force
 
     # Weights for QP
     w_position = 100.0       # Position tracking weight
@@ -76,7 +76,7 @@ class ConvexMPC():
         #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
         #     0  # gravity state
         # ])
-        self.Q = ca.diag([100,100,100,0,0,100,1,1,1,1,1,1,0]) 
+        self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
         
         self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
@@ -172,29 +172,6 @@ class ConvexMPC():
         for k in range(self.params.horizon_steps):
             for i in range(4): # For each foot
                 f_i = self.U[i * 3:(i + 1) * 3, k]
-
-                # Add force constraints for each foot in contact
-                # Enforce vertical (z) force constraints for stance phase
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[2] >= self.params.f_min)
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[2] <= self.params.f_max)
-
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[0] >= -self.params.mu * f_i[2]) # Fx >= -mu Fz
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[0] <= self.params.mu * f_i[2]) # Fx <= mu Fz
-
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[1] >= -self.params.mu * f_i[2]) # Fy >= -mu Fz
-                # self.opti.subject_to(self.contact_sched[i, k] * f_i[1] <= self.params.mu * f_i[2]) # Fy <= mu Fz
-
-                # self.opti.subject_to(self.opti.bounded(self.params.f_min, self.contact_sched[i, k] * f_i[2], self.params.f_max))
-                # self.opti.subject_to(self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[0], self.params.mu * f_i[2]))
-                # self.opti.subject_to(self.opti.bounded(-self.params.mu * f_i[2], self.contact_sched[i, k] * f_i[1], self.params.mu * f_i[2]))
-
-
-
-                # # Force components must be zero when foot is not in contact
-                # # Forces must be zero in swing
-                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[2] == 0)  # Z-force zero in swing
-                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[0] == 0)  # X-force zero in swing
-                # self.opti.subject_to((1 - self.contact_sched[i, k]) * f_i[1] == 0)  # Y-force zero in swing
 
                 # Apply vertical force constraint conditionally
                 self.opti.subject_to(
