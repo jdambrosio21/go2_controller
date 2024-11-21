@@ -110,7 +110,7 @@ class ConvexMPC():
 
             Args:
                 yaw: The desired yaw value at the n-th point in the reference trajectory
-                r: a [12 x 3] matrix, where each row is a xyz vector from the CoM to the ith contact point
+                r: a [4 x 3] matrix, where each row is a xyz vector from the CoM to the ith contact point
             
             Returns:
                 Ad: A [13 x 13] Matrix representing the discrete time dynamics of the state at the nth point
@@ -159,8 +159,23 @@ class ConvexMPC():
         for k in range(self.params.horizon_steps):
             # Get current state elements
             yaw = self.X[5, k]
+
+            # Get CURRENT CoM position from optimization variable, not reference
+            com_pos = self.X[:3, k]  # Current state in optimization
+
+            # Get foot positions for this timestep (12,)
+            foot_pos_k = self.foot_positions[:, k]
+        
+            # Reshape foot positions to 4x3 
+            foot_pos_reshaped = foot_pos_k.reshape((4, 3))
+        
+            # Create r vectors (4x3) from CoM to feet
+            r_vectors = foot_pos_reshaped - ca.repmat(com_pos.reshape((1, 3)), 4)
+
+            # Flatten r_vectors to 12, to match input expected by get_discretized_dynamics
+            r = ca.vec(r_vectors)
     
-            Ad, Bd = self.get_discretized_dynamics(yaw, self.foot_positions)
+            Ad, Bd = self.get_discretized_dynamics(yaw, r)
 
             X_next = Ad @ self.X[:, k] + Bd @ self.U[:, k]
 
