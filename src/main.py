@@ -65,7 +65,7 @@ def main():
                 print(f"Error in control loop: {e}")
                 # Return to standing if theres an error
                 print("Attempting to return to standing...")
-                controller.execute_stand_up()
+                execute_stand_up(controller)
     
     except Exception as e:
         print(f"Failed to initialize controller: {e}")

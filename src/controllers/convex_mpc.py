@@ -7,13 +7,13 @@ from typing import List, Optional
 @dataclass
 class MPCParams:
     """Parameters for MPC"""
-    dt: float = 0.0333            # Timestep
+    dt: float = 0.02            # Timestep
     horizon_steps: int = 10     # Length of horizon
 
     # Robot params
     mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
-    mu: float = 0.6           # Friction Coeff.
+    mu: float = 1.0           # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
@@ -76,14 +76,15 @@ class ConvexMPC():
         #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
         #     0  # gravity state
         # ])
-        self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
+        #self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
+        self.Q = ca.diag([0.25, 0.25, 10, 2, 2, 50, 0, 0, 0.3, 0.2, 0.2, 0.1, 0.0])
         
         self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
         # Add costs for the entire horizon
-        for k in range(self.params.horizon_steps):
+        for k in range(self.params.horizon_steps - 1):
             # State error cost
-            cost += (self.X[:, k] - self.x_ref[:, k]).T @ self.Q @ (self.X[:, k] - self.x_ref[:, k])
+            cost += (self.X[:, k+1] - self.x_ref[:, k+1]).T @ self.Q @ (self.X[:, k+1] - self.x_ref[:, k+1])
 
             # Control cost
             cost += self.U[:, k].T @ self.R @ self.U[:, k]
@@ -118,6 +119,8 @@ class ConvexMPC():
         """
         # Create A matrix for state augmented with gravity
         A = ca.MX.zeros((13, 13))
+        # n_k = self.x_ref.shape[1]  # Number of columns (k-values)
+        # avg_yaw = ca.sum1(self.x_ref[5, :]) / n_k
         R_z_yaw = ca.vertcat(
             ca.horzcat(ca.cos(yaw), ca.sin(yaw), 0),
             ca.horzcat(-ca.sin(yaw), ca.cos(yaw), 0),
@@ -156,11 +159,11 @@ class ConvexMPC():
         """Adds dynamics constraints to ensure the next state decision variable matches the simplified dynamics"""
 
         # over the entire horizon
-        for k in range(self.params.horizon_steps):
+        for k in range(self.params.horizon_steps - 1):
             # Get current state elements
             yaw = self.X[5, k]
 
-            # Get CURRENT CoM position from optimization variable, not reference
+            # Get  CoM position from optimization variable, not reference
             com_pos = self.X[:3, k]  # Current state in optimization
 
             # Get foot positions for this timestep (12,)
@@ -184,7 +187,7 @@ class ConvexMPC():
     def add_contact_constraints(self):
         """Adds constraints on forces for contact feet and friction cone"""
         
-        for k in range(self.params.horizon_steps):
+        for k in range(self.params.horizon_steps - 1):
             for i in range(4): # For each foot
                 f_i = self.U[i * 3:(i + 1) * 3, k]
 
@@ -240,7 +243,8 @@ class ConvexMPC():
             "verbose": False,
         }
         
-        self.opti.solver('qpoases', opts)
+        self.opti.solver('osqp')#, opts)
+        #self.opti.solver('qpoases', opts)
 
         try:
             # Set values
