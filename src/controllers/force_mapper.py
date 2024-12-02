@@ -24,7 +24,7 @@ class ForceMapper:
         }
 
         # Swing control gains - from paper
-        self.Kp = np.diag([700, 700, 150]) /10  # Position gains
+        self.Kp = np.diag([700, 700, 150])  # Position gains
         self.Kd = np.diag([7, 7, 7])      # Velocity gains
 
         # Torque limits from Go2 specs (Nm)
@@ -107,7 +107,7 @@ class ForceMapper:
         force_des = np.array(force_des).reshape(3, 1)
         
         # Compute torques
-        tau = J.T @ (R_world_base.T @ force_des)
+        tau = J.T @ R_world_base.T @ force_des
         tau = tau.flatten()  # Ensure output is 1D array
         print(tau)
         
