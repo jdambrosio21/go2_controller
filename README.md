@@ -5,6 +5,10 @@ A Model Predictive Controller (MPC) implementation for the Unitree Go2 quadruped
 ## Overview
 This repository contains a Python implementation of a Convex Model Predictive Controller for quadruped locomotion, based on the MIT Cheetah 3 paper.
 
+## Prerequisites
+First install the Unitree Mujoco simulator from:
+https://github.com/unitreerobotics/unitree_mujoco
+
 ## Quick Start
 1. Clone this repository
 ```bash
