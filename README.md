@@ -3,7 +3,7 @@
 A Model Predictive Controller (MPC) implementation for the Unitree Go2 quadruped robot.
 
 ## Overview
-This repository contains a Python implementation of a Model Predictive Controller for quadruped locomotion, based on the MIT Cheetah 3 paper.
+This repository contains a Python implementation of a Convex Model Predictive Controller for quadruped locomotion, based on the MIT Cheetah 3 paper.
 
 ## Quick Start
 1. Clone this repository
