@@ -17,7 +17,7 @@ cd go2_controller
 
 3. Install dependencies:
 ```bash
-pip install -r requirements.txt
+conda install --yes --file requirements.txt
 ```
 
 ## Project Structure
