@@ -43,7 +43,7 @@ class ConvexMPC():
         self.opti = ca.Opti('conic') # Convex QP
 
         # Decision variables
-        self.n_states = 13 # [pos(3), ori(3), lin_vel(3), ang_vel(3), gravity(1)]
+        self.n_states = 13 # [ori(3), pos(3), ang_vel(3), lin_vel(3), gravity(1)]
         self.n_inputs = 12 # 4 Forces for each foot (xyz)
 
         # Setup optimization vairables
@@ -144,6 +144,9 @@ class ConvexMPC():
             ca.horzcat(A, B),
             ca.horzcat(ca.DM.zeros((12, 13)), ca.DM_eye(12))
         )
+        #  M = ca.vertcat(
+        #     ca.horzcat(A, B),
+        #     ca.horzcat(ca.DM.zeros((12, 13)), ca.DM.zeros((12,12))))
 
         M_d = matrix_exp(M * self.params.dt)
 
@@ -153,18 +156,16 @@ class ConvexMPC():
 
         return Ad, Bd
 
-
-
     def add_dynamics_constraints(self):
         """Adds dynamics constraints to ensure the next state decision variable matches the simplified dynamics"""
 
         # over the entire horizon
         for k in range(self.params.horizon_steps): #k-1
             # Get current state elements
-            yaw = self.X[5, k]
+            yaw = self.X[2, k]
 
             # Get  CoM position from optimization variable, not reference
-            com_pos = self.X[:3, k]  # Current state in optimization
+            com_pos = self.X[3:6, k]  # Current state in optimization
 
             # Get foot positions for this timestep (12,)
             foot_pos_k = self.foot_positions[:, k]
@@ -190,31 +191,32 @@ class ConvexMPC():
         for k in range(self.params.horizon_steps): #k-1
             for i in range(4): # For each foot
                 f_i = self.U[i * 3:(i + 1) * 3, k]
+                contact = self.contact_sched[i, k]
 
                 # Apply vertical force constraint conditionally
                 self.opti.subject_to(
-                    f_i[2] >= ca.if_else(self.contact_sched[i, k] == 1, self.params.f_min, 0)
+                    f_i[2] >= ca.if_else(contact == 1, self.params.f_min, 0)
                 )
                 self.opti.subject_to(
-                    f_i[2] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.f_max, 0)
+                    f_i[2] <= ca.if_else(contact == 1, self.params.f_max, 0)
                 )
 
                 # Friction cone constraint
                 self.opti.subject_to(
-                    f_i[0] >= ca.if_else(self.contact_sched[i, k] == 1, -self.params.mu * f_i[2], 0)
+                    f_i[0] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
                 )
                 self.opti.subject_to(
-                    f_i[0] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.mu * f_i[2], 0)
+                    f_i[0] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
                 )
                 self.opti.subject_to(
-                    f_i[1] >= ca.if_else(self.contact_sched[i, k] == 1, -self.params.mu * f_i[2], 0)
+                    f_i[1] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
                 )
                 self.opti.subject_to(
-                    f_i[1] <= ca.if_else(self.contact_sched[i, k] == 1, self.params.mu * f_i[2], 0)
+                    f_i[1] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
                 )
 
                 # Forces must be zero during swing phase
-                self.opti.subject_to(f_i == ca.if_else(self.contact_sched[i, k] == 1, f_i, [0, 0, 0]))
+                self.opti.subject_to(f_i == ca.if_else(contact == 1, f_i, [0, 0, 0]))
 
 
     def solve(self,
@@ -235,15 +237,13 @@ class ConvexMPC():
         """
 
         opts = {
-            'printLevel': 'none',
-            'print_time': 0,
-            'print_problem': 0,
-            'print_in': 0,
-            'print_out': 0,
-            "verbose": False,
+            'verbose': False,
+            # 'warm_start': True,
+            # 'polish': True,
+            # 'adaptive_rho': True
         }
         
-        self.opti.solver('osqp')#, opts)
+        self.opti.solver('osqp', opts)
         #self.opti.solver('qpoases', opts)
 
         try:
@@ -251,22 +251,21 @@ class ConvexMPC():
             x0 = ca.DM(x0.tolist())
             x_ref = ca.DM(x_ref.tolist())
             contact_schedule = ca.DM(contact_schedule.tolist())
+            
             self.opti.set_value(self.x0, x0)
             self.opti.set_value(self.x_ref, x_ref)
             self.opti.set_value(self.contact_sched, contact_schedule)
-
-            
             self.opti.set_value(self.foot_positions, foot_positions)
+
+            # Get previous solution if available
+            if hasattr(self, 'prev_sol'):
+                self.opti.set_initial(self.prev_sol.value_variables())
             
             print("\nAttempting to solve...")
             sol = self.opti.solve()
+            self.prev_sol = sol # Warm Start
             
             forces = sol.value(self.U)[:, 0]
-            #print(f"Optimal forces: {forces}")
-            print("\nMPC Forces Debug:")
-            # First print raw forces
-            #print(f"Raw force vector: {forces}")
-            # Then print per leg
             for i in range(4):
                 print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
             
@@ -276,19 +275,8 @@ class ConvexMPC():
             print(f"\nMPC solve failed with error: {e}")
             import traceback
             traceback.print_exc()
-            
-            # # Print current variable values
-            # try:
-            #     print("\nCurrent variable values:")
-            #     print(f"X: {self.opti.debug.value(self.X)}")
-            #     print(f"U: {self.opti.debug.value(self.U)}")
-            # except:
-            #     print("Could not print debug values")
-                
-            return None
-        
 
-def matrix_exp(A, order=6):
+def matrix_exp(A, order=0):
     """
     Symbolic matrix exponential using Padé approximation
     A: Input matrix

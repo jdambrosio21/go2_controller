@@ -24,7 +24,7 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=0.4, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=0.3, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
@@ -197,10 +197,10 @@ class Go2Controller:
         # Run MPC
         rpy = self.robot.quat_to_rpy(q[3:7])
         x0 = np.concatenate([
-            q[0:3],     # position
             rpy,        # orientation
-            dq[0:3],    # linear velocity
+            q[0:3],     # position
             dq[3:6],    # angular velocity
+            dq[0:3],    # linear velocity
             [9.81],     # gravity
         ])
 
