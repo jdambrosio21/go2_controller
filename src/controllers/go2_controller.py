@@ -361,7 +361,7 @@ class Go2Controller:
         x_ref[0:3, 0] = current_state[0:3]  # Starting COM position
         
         # Set desired height
-        desired_height = 0.3  # Or whatever your nominal height is
+        desired_height = 0.33 # Or whatever your nominal height is
         x_ref[2, :] = desired_height  # Maintain constant height
         
         # Propagate position linearly based on desired velocity

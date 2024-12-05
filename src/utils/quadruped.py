@@ -108,6 +108,38 @@ class Quadruped:
         for i, joint in enumerate(self.model.joints):
             joint_name = self.model.names[i]
             print(f"{joint_name:<16} | {joint.idx_q:<10} | {joint.idx_v:<10} | {joint.nv:<3}")
+
+    def debug_frames(self, q: np.ndarray):
+        """Debug frame transforms for each leg"""
+        # Update kinematics
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+
+        # Get base frame transform
+        base_frame_id = self.model.getFrameId('floating_base')
+        base_transform = self.data.oMf[base_frame_id]
+        print("\nBase Frame Transform:")
+        print(f"Position: {base_transform.translation}")
+        print(f"Rotation:\n{base_transform.rotation}")
+
+        # Debug each leg's frames
+        for leg in ["FL", "FR", "RL", "RR"]:
+            print(f"\n{leg} Leg Frames:")
+            # Hip frame
+            hip_frame_id = self.leg_frame_ids["hip"][leg]
+            hip_transform = self.data.oMf[hip_frame_id]
+            print(f"Hip position (world): {hip_transform.translation}")
+            print(f"Hip rotation (world to hip):\n{hip_transform.rotation}")
+            
+            # Foot frame
+            foot_frame_id = self.leg_frame_ids["foot"][leg]
+            foot_transform = self.data.oMf[foot_frame_id]
+            print(f"Foot position (world): {foot_transform.translation}")
+            print(f"Foot rotation (world to foot):\n{foot_transform.rotation}")
+
+            # Calculate hip to foot vector in world frame
+            hip_to_foot = foot_transform.translation - hip_transform.translation
+            print(f"Hip to foot vector (world): {hip_to_foot}")
    
         
 if __name__ == "__main__":
@@ -131,3 +163,31 @@ if __name__ == "__main__":
     # Test quaternion to RPY conversion
     quat = np.array([0, 0, 0, 1])  # Identity quaternion
     print("RPY angles from quaternion:", robot.quat_to_rpy(quat))
+
+    # Debug frame transforms
+    pin.forwardKinematics(robot.model, robot.data, q)
+    pin.updateFramePlacements(robot.model, robot.data)
+
+    print("\n=== Base Frame ===")
+    base_frame_id = robot.model.getFrameId('base')
+    base_transform = robot.data.oMf[base_frame_id]
+    print(f"Base Position: {base_transform.translation.WORLD}")
+    print(f"Base Rotation:\n{base_transform.rotation}")
+
+    # Print transforms for each leg
+    for leg in ["FL", "FR", "RL", "RR"]:
+        print(f"\n=== {leg} Leg ===")
+        # Hip
+        hip_frame_id = robot.leg_frame_ids["hip"][leg]
+        hip_transform = robot.data.oMf[hip_frame_id]
+        print(f"Hip position: {hip_transform.translation}")
+        
+        # Foot
+        foot_frame_id = robot.leg_frame_ids["foot"][leg]
+        foot_transform = robot.data.oMf[foot_frame_id]
+        print(f"Foot position: {foot_transform.translation}")
+        
+        # Hip to foot vector
+        hip_to_foot = foot_transform.translation - hip_transform.translation
+        print(f"Hip to foot vector: {hip_to_foot}")
+        print(f"Hip to foot distance: {np.linalg.norm(hip_to_foot)}")
