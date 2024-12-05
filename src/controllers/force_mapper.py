@@ -24,7 +24,7 @@ class ForceMapper:
         }
 
         # Swing control gains - from paper
-        self.Kp = np.diag([700, 700, 150])  # Position gains
+        self.Kp = np.diag([700, 700, 150]) /10  # Position gains
         self.Kd = np.diag([7, 7, 7])      # Velocity gains
 
         # Torque limits from Go2 specs (Nm)

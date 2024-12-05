@@ -76,13 +76,13 @@ class ConvexMPC():
         #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
         #     0  # gravity state
         # ])
-        #self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
-        self.Q = ca.diag([0.25, 0.25, 10, 2, 2, 50, 0, 0, 0.3, 0.2, 0.2, 0.1, 0.0])
+        self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
+        #self.Q = ca.diag([0.25, 0.25, 10, 2, 2, 50, 0, 0, 0.3, 0.2, 0.2, 0.1, 0.0])
         
         self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
         # Add costs for the entire horizon
-        for k in range(self.params.horizon_steps - 1):
+        for k in range(self.params.horizon_steps): #k-1
             # State error cost
             cost += (self.X[:, k+1] - self.x_ref[:, k+1]).T @ self.Q @ (self.X[:, k+1] - self.x_ref[:, k+1])
 
@@ -159,7 +159,7 @@ class ConvexMPC():
         """Adds dynamics constraints to ensure the next state decision variable matches the simplified dynamics"""
 
         # over the entire horizon
-        for k in range(self.params.horizon_steps - 1):
+        for k in range(self.params.horizon_steps): #k-1
             # Get current state elements
             yaw = self.X[5, k]
 
@@ -187,7 +187,7 @@ class ConvexMPC():
     def add_contact_constraints(self):
         """Adds constraints on forces for contact feet and friction cone"""
         
-        for k in range(self.params.horizon_steps - 1):
+        for k in range(self.params.horizon_steps): #k-1
             for i in range(4): # For each foot
                 f_i = self.U[i * 3:(i + 1) * 3, k]
 

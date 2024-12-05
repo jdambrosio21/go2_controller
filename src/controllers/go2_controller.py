@@ -72,6 +72,18 @@ class Go2Controller:
         self.q_nom[6:9] = self.stand_up_joint_pos[9:]   # RL
         self.q_nom[9:]  = self.stand_up_joint_pos[6:9]  # RR
 
+        # Initialize torque arrays with explicit shapes and names
+        self.torques = np.zeros(12)  # [FL, FR, RL, RR] order
+        self.go2_torques = np.zeros(12)  # Go2 hardware order
+    
+        # Create leg order mappings
+        self.mpc_to_go2_mapping = {
+            'FL': (3, 6),   # Maps to go2_torques[0:3]
+            'FR': (0, 3),   # Maps to go2_torques[3:6]
+            'RL': (9, 12),  # Maps to go2_torques[6:9]
+            'RR': (6, 9)    # Maps to go2_torques[9:]
+        }
+
         # Initialize communication components
         self.pub = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.pub.Init()
@@ -106,7 +118,7 @@ class Go2Controller:
             try:
                 # State update at lower rate (100Hz)
                 current_time = time.perf_counter()
-                if last_state is None or current_time - last_state_time >= 0.01:
+                if last_state is None or current_time - last_state_time >= 0.001:
                     q, dq = self.state_estimator.get_state()
                     if q is None or dq is None:
                         continue
@@ -144,10 +156,12 @@ class Go2Controller:
                     self.update_swing_trajectories(q, dq, x_ref, contact_state) #???
 
                     # 4. Compute and apply torques using current MPC forces (1 kHz)
-                    torques = self.compute_leg_torques(q, dq, contact_state)
+                    #self.torques = 
+                    self.compute_leg_torques(q, dq, contact_state)
             
                     # Apply torques
-                    self.apply_torques(torques)
+                    #self.apply_torques(self.torques)
+                    self.apply_torques()
 
                 # Strict timing enforcement
                 elapsed = time.perf_counter() - loop_start
@@ -225,30 +239,35 @@ class Go2Controller:
 
     def compute_leg_torques(self, q: np.ndarray, dq: np.ndarray, contact_state: List[int]) -> np.ndarray:
         """Compute torques for all legs at 1 kHz"""
-        torques = np.zeros(12)
 
         for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
-            if contact_state[i] == 1: # Stance
+            idx = slice(i*3, (i+1)*3)  # Create slice object for cleaner indexing
+            if contact_state[i] == 1:  # Stance
                 # Get forces for this leg from MPC horizon
-                force = self.current_mpc_forces[i*3:(i+1)*3]
-                torques[i*3:(i+1)*3] = self.force_mapper.compute_stance_torques(leg, q, dq, force)
-            
-            else: # Swing
+                force = self.current_mpc_forces[idx]
+                self.torques[idx] = self.force_mapper.compute_stance_torques(leg, q, dq, force)
+            else:  # Swing
                 traj = self.swing_trajectories[leg]
                 if traj is not None:
-                    torques[i*3:(i+1)*3] = self.force_mapper.compute_swing_torques(leg, q, dq, traj.p, traj.v, traj.a)
-        
-        return torques
+                    self.torques[idx] = self.force_mapper.compute_swing_torques(leg, q, dq, traj.p, traj.v, traj.a)
+
     
-    def apply_torques(self, torques: np.ndarray):
+    def apply_torques(self): #torques: np.ndarray):
         """Apply computed torques to the robot"""
 
         # Re order torques
-        go2_torques = np.zeros(12)
-        go2_torques[0:3] = torques[3:6]
-        go2_torques[3:6] = torques[0:3]
-        go2_torques[6:9] = torques[9:]
-        go2_torques[9:] = torques[6:9]
+        # Reorder using slice mapping
+        for leg, (start, end) in self.mpc_to_go2_mapping.items():
+            self.go2_torques[start:end] = self.torques[start:end]
+        
+        # Apply to motors
+        for i in range(12):
+            self.cmd.motor_cmd[i].mode = 0x01
+            self.cmd.motor_cmd[i].q = 0.0
+            self.cmd.motor_cmd[i].kp = 0.0
+            self.cmd.motor_cmd[i].dq = 0.0
+            self.cmd.motor_cmd[i].kd = 0.0
+            self.cmd.motor_cmd[i].tau = float(self.go2_torques[i])
 
         # Get torques in MPC order [FL, FR, RL, RR]
         # Map to Go2's motor indices using LegID
@@ -301,7 +320,7 @@ class Go2Controller:
             self.cmd.motor_cmd[i].kp = 0.0
             self.cmd.motor_cmd[i].dq = 0.0
             self.cmd.motor_cmd[i].kd = 0.0
-            self.cmd.motor_cmd[i].tau = float(go2_torques[i])
+            self.cmd.motor_cmd[i].tau = float(self.go2_torques[i])
         
         # Send single command with all torques
         self.cmd.crc = self.crc.Crc(self.cmd)
