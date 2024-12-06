@@ -24,7 +24,7 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=0.3, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=0.4, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
@@ -128,23 +128,25 @@ class Go2Controller:
                     q, dq = last_state
 
                 # Update gait at 1kHz
-                self.gait_scheduler.update(self.control_dt)  # Using control_dt instead of mpc_dt
+                #self.gait_scheduler.update(self.control_dt)  # Using control_dt instead of mpc_dt
 
                  ##**Compute x_ref before the if block**
-                x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
+                #x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
 
             
                 
                 # 2. Run MPC if enough time has passed (50 Hz)
                 if current_time - last_mpc_update >= self.mpc_dt:
-                    #x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
+                    # Update gait timing if needed
+                    self.gait_scheduler.update(self.mpc_dt)
+
+                    x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
 
                     self.run_mpc_update(q, dq, x_ref)
                     #self.last_mpc_time = current_time
                     last_mpc_update = current_time
 
-                    # Update gait timing if needed
-                    #self.gait_scheduler.update(self.mpc_dt)
+                    
                 
                 # 3. Update gait and foot trajectories (1 kHz)
                 # 3. Fast Loop (1 kHz) - Use stored MPC forces
@@ -156,11 +158,9 @@ class Go2Controller:
                     self.update_swing_trajectories(q, dq, x_ref, contact_state) #???
 
                     # 4. Compute and apply torques using current MPC forces (1 kHz)
-                    #self.torques = 
                     self.compute_leg_torques(q, dq, contact_state)
             
                     # Apply torques
-                    #self.apply_torques(self.torques)
                     self.apply_torques()
 
                 # Strict timing enforcement
@@ -244,12 +244,17 @@ class Go2Controller:
             idx = slice(i*3, (i+1)*3)  # Create slice object for cleaner indexing
             if contact_state[i] == 1:  # Stance
                 # Get forces for this leg from MPC horizon
+                
                 force = self.current_mpc_forces[idx]
+                print(f"\n{leg} Stance Force: {force}")
                 self.torques[idx] = self.force_mapper.compute_stance_torques(leg, q, dq, force)
+                print(f"{leg} Stance Torques: {self.torques[idx]}")
             else:  # Swing
                 traj = self.swing_trajectories[leg]
                 if traj is not None:
+                    print(f"\n{leg} Swing Target: {traj.p}")
                     self.torques[idx] = self.force_mapper.compute_swing_torques(leg, q, dq, traj.p, traj.v, traj.a)
+                    print(f"{leg} Swing Torques: {self.torques[idx]}")
 
     
     def apply_torques(self): #torques: np.ndarray):

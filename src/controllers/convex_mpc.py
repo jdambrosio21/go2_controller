@@ -3,6 +3,7 @@ import casadi as ca
 from numpy.typing import NDArray
 from dataclasses import dataclass
 from typing import List, Optional
+from .matrix_exp_pade import matrix_exp_pade 
 
 @dataclass
 class MPCParams:
@@ -13,7 +14,7 @@ class MPCParams:
     # Robot params
     mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
-    mu: float = 1.0           # Friction Coeff.
+    mu: float = 0.4           # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
@@ -148,11 +149,18 @@ class ConvexMPC():
         #     ca.horzcat(A, B),
         #     ca.horzcat(ca.DM.zeros((12, 13)), ca.DM.zeros((12,12))))
 
-        M_d = matrix_exp(M * self.params.dt)
+        # NOTE: Euler integration instead? RK4?
+        # M_d = matrix_exp_pade(M * self.params.dt)
 
-        # Extract discrete-time Ad and Bd
-        Ad = M_d[:13, :13]
-        Bd = M_d[:13, 13:]
+        # # Extract discrete-time Ad and Bd
+        # Ad = M_d[:13, :13]
+        # Bd = M_d[:13, 13:]
+        # Discretize properly: Ad = e^(AT), Bd = integral(0->T) e^(As)B ds
+        Ad = matrix_exp_pade(A * self.params.dt)  #e^(AT)
+        
+        # For Bd, we can approximate the integral:
+        # A not invertible, use:
+        Bd = self.params.dt * Ad @ B  # First order approximation
 
         return Ad, Bd
 
@@ -185,39 +193,60 @@ class ConvexMPC():
 
             self.opti.subject_to(self.X[:, k+1] == X_next)
     
-    def add_contact_constraints(self):
-        """Adds constraints on forces for contact feet and friction cone"""
+    # def add_contact_constraints(self):
+    #     """Adds constraints on forces for contact feet and friction cone"""
         
-        for k in range(self.params.horizon_steps): #k-1
-            for i in range(4): # For each foot
-                f_i = self.U[i * 3:(i + 1) * 3, k]
+    #     for k in range(self.params.horizon_steps): #k-1
+    #         for i in range(4): # For each foot
+    #             f_i = self.U[i * 3:(i + 1) * 3, k]
+    #             contact = self.contact_sched[i, k]
+
+    #             # Apply vertical force constraint conditionally
+    #             self.opti.subject_to(
+    #                 f_i[2] >= ca.if_else(contact == 1, self.params.f_min, 0)
+    #             )
+    #             self.opti.subject_to(
+    #                 f_i[2] <= ca.if_else(contact == 1, self.params.f_max, 0)
+    #             )
+
+    #             # Friction cone constraint
+    #             self.opti.subject_to(
+    #                 f_i[0] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
+    #             )
+    #             self.opti.subject_to(
+    #                 f_i[0] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
+    #             )
+    #             self.opti.subject_to(
+    #                 f_i[1] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
+    #             )
+    #             self.opti.subject_to(
+    #                 f_i[1] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
+    #             )
+
+    #             # Forces must be zero during swing phase
+    #             self.opti.subject_to(f_i == ca.if_else(contact == 1, f_i, [0, 0, 0]))
+
+    def add_contact_constraints(self):
+        for k in range(self.params.horizon_steps):
+            for i in range(4):
+                f_i = self.U[i*3:(i+1)*3, k]
                 contact = self.contact_sched[i, k]
-
-                # Apply vertical force constraint conditionally
-                self.opti.subject_to(
-                    f_i[2] >= ca.if_else(contact == 1, self.params.f_min, 0)
-                )
-                self.opti.subject_to(
-                    f_i[2] <= ca.if_else(contact == 1, self.params.f_max, 0)
-                )
-
-                # Friction cone constraint
-                self.opti.subject_to(
-                    f_i[0] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
-                )
-                self.opti.subject_to(
-                    f_i[0] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
-                )
-                self.opti.subject_to(
-                    f_i[1] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
-                )
-                self.opti.subject_to(
-                    f_i[1] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
-                )
-
-                # Forces must be zero during swing phase
-                self.opti.subject_to(f_i == ca.if_else(contact == 1, f_i, [0, 0, 0]))
-
+                    
+                # Normal force (eq. 22)
+                self.opti.subject_to(f_i[2] >= contact * self.params.f_min)
+                self.opti.subject_to(f_i[2] <= contact * self.params.f_max)
+                
+                # Friction cone (eq. 23-24)
+                self.opti.subject_to(f_i[0] <= self.params.mu * f_i[2])  # x force
+                self.opti.subject_to(f_i[0] >= -self.params.mu * f_i[2])
+                self.opti.subject_to(f_i[1] <= self.params.mu * f_i[2])  # y force
+                self.opti.subject_to(f_i[1] >= -self.params.mu * f_i[2])
+                
+                # Zero force during swing
+                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
+                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
+                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
+                #self.opti.subject_to(f_i == ca.if_else(contact == 0, 0, f_i))
 
     def solve(self,
               x0: NDArray,
@@ -248,9 +277,9 @@ class ConvexMPC():
 
         try:
             # Set values
-            x0 = ca.DM(x0.tolist())
-            x_ref = ca.DM(x_ref.tolist())
-            contact_schedule = ca.DM(contact_schedule.tolist())
+            x0 = ca.DM(x0.tolist()) # From state estimate
+            x_ref = ca.DM(x_ref.tolist()) # from ref traj
+            contact_schedule = ca.DM(contact_schedule.tolist()) # from the gait scheduler
             
             self.opti.set_value(self.x0, x0)
             self.opti.set_value(self.x_ref, x_ref)
@@ -266,8 +295,8 @@ class ConvexMPC():
             self.prev_sol = sol # Warm Start
             
             forces = sol.value(self.U)[:, 0]
-            for i in range(4):
-                print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
+            # for i in range(4):
+            #     print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
             
             return forces
 
@@ -275,27 +304,3 @@ class ConvexMPC():
             print(f"\nMPC solve failed with error: {e}")
             import traceback
             traceback.print_exc()
-
-def matrix_exp(A, order=0):
-    """
-    Symbolic matrix exponential using Padé approximation
-    A: Input matrix
-    order: Order of Padé approximation (higher = more accurate)
-    """
-    n = A.shape[0]
-    I = ca.DM.eye(n)
-    A_powers = [I]
-    A_current = I
-    factorial = 1
-    
-    # Compute Taylor series terms
-    for i in range(1, order + 1):
-        factorial *= i
-        A_current = A_current @ A
-        A_powers.append(A_current / factorial)
-    
-    # Padé approximation
-    N = sum(A_powers[i] for i in range(0, order + 1, 2))
-    D = sum(A_powers[i] for i in range(1, order + 1, 2))
-    
-    return (I + D) @ ca.inv(I - D)
