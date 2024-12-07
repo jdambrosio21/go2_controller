@@ -28,7 +28,7 @@ class ForceMapper:
         # Control gains
         self.Kp = np.diag([700, 700, 150])  
         self.Kd = np.diag([7, 7, 7])      
-        self.omega = 2.0  # Natural frequency for gain adaptation
+        #self.omega = 2.0  # Natural frequency for gain adaptation
 
         # Torque limits
         self.tau_max = np.array([23.7, 23.7, 45.4])
@@ -78,8 +78,8 @@ class ForceMapper:
         
         # Get operational space inertia and update gains
         Lambda, J = self.compute_operational_space_inertia(leg_id, q)
-        for i in range(3):
-            self.Kp[i,i] = self.omega**2 * Lambda[i,i]
+        # for i in range(3):
+        #     self.Kp[i,i] = self.omega**2 * Lambda[i,i]
         
         # Current state
         p_current = self.data.oMf[frame_id].translation
@@ -121,7 +121,7 @@ if __name__ == "__main__":
             0.00571868, 0.608813, -1.21763,     # RR
             -0.00571868, 0.608813, -1.21763     # RL
         ])
-    torques = force_mapper.compute_stance_torques("FR", q_stand, np.zeros(12), np.array([-0, 0, 17]))
+    torques = force_mapper.compute_stance_torques("RR", q_stand, np.zeros(12), np.array([-40, 40, 100]))
     print(torques)
 
     

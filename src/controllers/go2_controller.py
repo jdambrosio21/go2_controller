@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import sys
+from enum import Enum 
 from typing import List, Optional
 
 # Unitree SDK
@@ -19,6 +20,10 @@ from planners.foot_swing_trajectory import FootSwingTrajectory
 from state_estimation.go2_state_estimator import Go2StateEstimator
 from state_estimation import unitree_legged_const as go2
 from utils.quadruped import Quadruped
+
+class ControlState(Enum):
+    STAND_UP = 1
+    NORMAL_OPERATION = 2
 
 class Go2Controller:
     def __init__(self, urdf_path: str):
@@ -91,6 +96,12 @@ class Go2Controller:
         self.initialize_command()
         self.crc = CRC()
 
+        self.control_state = ControlState.STAND_UP
+        self.stand_start_time = None
+        self.last_mpc_update = 0
+        self.next_control_update = 0
+        self.running_time = 0.0
+
     def initialize_command(self):
         """Initialize command message"""
         self.cmd.head[0] = 0xFE
@@ -109,66 +120,79 @@ class Go2Controller:
 
     def run_control_loop(self):
         """Main 1kHz low-level Control Loop"""
-        last_mpc_update = time.perf_counter()
-        last_state = None  # Cache state computation results
-        last_state_time = 0
+        # First, run stand up
+        current_time = time.perf_counter()
+        self.stand_start_time = current_time
+        self.next_control_update = current_time
+        self.last_mpc_update = current_time
     
         while True:
-            loop_start = time.perf_counter()
             try:
-                # State update at lower rate (100Hz)
                 current_time = time.perf_counter()
-                if last_state is None or current_time - last_state_time >= 0.001:
-                    q, dq = self.state_estimator.get_state()
-                    if q is None or dq is None:
-                        continue
-                    last_state = (q, dq)
-                    last_state_time = current_time
-                else:
-                    q, dq = last_state
-
-                # Update gait at 1kHz
-                #self.gait_scheduler.update(self.control_dt)  # Using control_dt instead of mpc_dt
-
-                 ##**Compute x_ref before the if block**
-                #x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
-
-            
                 
-                # 2. Run MPC if enough time has passed (50 Hz)
-                if current_time - last_mpc_update >= self.mpc_dt:
-                    # Update gait timing if needed
-                    self.gait_scheduler.update(self.mpc_dt)
+                # Wait until next 1 kHz control cycle
+                if current_time < self.next_control_update:
+                    continue
 
-                    x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
+                # Update running time
+                self.running_time = current_time - self.stand_start_time
 
-                    self.run_mpc_update(q, dq, x_ref)
-                    #self.last_mpc_time = current_time
-                    last_mpc_update = current_time
-
-                    
-                
-                # 3. Update gait and foot trajectories (1 kHz)
-                # 3. Fast Loop (1 kHz) - Use stored MPC forces
-                if self.current_mpc_forces is not None:
-                # Get current contact state from gait scheduler
-                    contact_state = self.gait_scheduler.get_current_contact_state()
-                    
-                    # Update swing trajectories
-                    self.update_swing_trajectories(q, dq, x_ref, contact_state) #???
-
-                    # 4. Compute and apply torques using current MPC forces (1 kHz)
-                    self.compute_leg_torques(q, dq, contact_state)
+                # State machine for control modes
+                if self.control_state == ControlState.STAND_UP:
+                    # Stand up for first 3 seconds
+                    if self.running_time < 3.0:
+                        # Stand up phase
+                        self.execute_stand_up()
+                    else:
+                        print("Stand up complete, transitioning to normal operation")
+                        self.control_state = ControlState.NORMAL_OPERATION
             
-                    # Apply torques
-                    self.apply_torques()
+                # Now that were standing, enter into main control loop
+                elif self.control_state == ControlState.NORMAL_OPERATION:
+                    # Get state at 1 kHz
+                    q, dq = self.state_estimator.get_state() 
+                    
+                    # Check if its time for MPC update (50 Hz)
+                    if current_time >= self.last_mpc_update + self.mpc_dt:
+                        # Update gait timing
+                        self.gait_scheduler.update(self.mpc_dt)
 
-                # Strict timing enforcement
-                elapsed = time.perf_counter() - loop_start
-                if elapsed < self.control_dt:
-                    time.sleep(self.control_dt - elapsed)
-                else:
-                    print(f"Control loop overtime: {elapsed*1000:.2f} ms")
+                        # Create reference trajectory
+                        x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
+
+                        # Run the MPC update    
+                        self.run_mpc_update(q, dq, x_ref)
+
+                        # Update timestep
+                        self.last_mpc_update += self.mpc_dt
+
+                    # Apply torques if MPC forces exist (1 kHz)
+                    if self.current_mpc_forces is not None:
+                        # Get current contact state from gait scheduler
+                        contact_state = self.gait_scheduler.get_current_contact_state()
+                        
+                        # Update swing trajectories
+                        self.update_swing_trajectories(q, dq, x_ref, contact_state) 
+
+                        # Compute leg torques
+                        self.compute_leg_torques(q, dq, contact_state)
+                
+                        # Send torques to be published
+                        self.send_torques()
+
+                # Send single command (either for stand or torque control)
+                self.cmd.crc = self.crc.Crc(self.cmd)
+                self.pub.Write(self.cmd)
+
+                # Update next control cycle time
+                self.next_control_update += self.control_dt
+
+                # Check if we're falling behind
+                if current_time > self.next_control_update:
+                    print(f"Control loop overtime: {(current_time - self.next_control_update)*1000:.2f} ms")
+                    # Reset timing if we're more than one cycle behind
+                    if current_time > self.next_control_update + self.control_dt:
+                        self.next_control_update = current_time + self.control_dt
 
             except Exception as e:
                 print(f"Control loop error: {e}")
@@ -179,8 +203,6 @@ class Go2Controller:
     def run_mpc_update(self, q: np.ndarray, dq: np.ndarray, x_ref: np.ndarray):
         """Run MPC Update at desired Hz (50)"""
 
-        # Update gait scheduler
-        #self.gait_scheduler.update(self.mpc_dt)
 
         # Get contact schedule for horizon
         contact_schedule = self.gait_scheduler.predict_horizon_contact_state(self.mpc_dt, self.mpc_horizon_steps)
@@ -257,7 +279,7 @@ class Go2Controller:
                     print(f"{leg} Swing Torques: {self.torques[idx]}")
 
     
-    def apply_torques(self): #torques: np.ndarray):
+    def send_torques(self): #torques: np.ndarray):
         """Apply computed torques to the robot"""
 
         # Re order torques
@@ -267,85 +289,25 @@ class Go2Controller:
         
         # Apply to motors
         for i in range(12):
-            self.cmd.motor_cmd[i].mode = 0x01
-            self.cmd.motor_cmd[i].q = 0.0
-            self.cmd.motor_cmd[i].kp = 0.0
-            self.cmd.motor_cmd[i].dq = 0.0
-            self.cmd.motor_cmd[i].kd = 0.0
             self.cmd.motor_cmd[i].tau = float(self.go2_torques[i])
-
-        # Get torques in MPC order [FL, FR, RL, RR]
-        # Map to Go2's motor indices using LegID
-        # FL torques
-        # self.cmd.motor_cmd[go2.LegID["FL_0"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FL_1"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FL_2"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FL_0"]].tau = float(torques[0])
-        # self.cmd.motor_cmd[go2.LegID["FL_1"]].tau = float(torques[1])
-        # self.cmd.motor_cmd[go2.LegID["FL_2"]].tau = float(torques[2])
-
-        # # FR torques
-        # self.cmd.motor_cmd[go2.LegID["FR_0"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FR_1"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FR_2"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["FR_0"]].tau = float(torques[3])
-        # self.cmd.motor_cmd[go2.LegID["FR_1"]].tau = float(torques[4])
-        # self.cmd.motor_cmd[go2.LegID["FR_2"]].tau = float(torques[5])
-
-        # # RL torques
-        # self.cmd.motor_cmd[go2.LegID["RL_0"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RL_1"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RL_2"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RL_0"]].tau = float(torques[6])
-        # self.cmd.motor_cmd[go2.LegID["RL_1"]].tau = float(torques[7])
-        # self.cmd.motor_cmd[go2.LegID["RL_2"]].tau = float(torques[8])
-
-        # # RR torques
-        # self.cmd.motor_cmd[go2.LegID["RR_0"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RR_1"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RR_2"]].mode = 0x01
-        # self.cmd.motor_cmd[go2.LegID["RR_0"]].tau = float(torques[9])
-        # self.cmd.motor_cmd[go2.LegID["RR_1"]].tau = float(torques[10])
-        # self.cmd.motor_cmd[go2.LegID["RR_2"]].tau = float(torques[11])
-
-        # # Set other parameters to zero for pure torque control
-        # for i in range(20):
-        #     self.cmd.motor_cmd[i].q = 0.0
-        #     self.cmd.motor_cmd[i].kp = 0.0
-        #     self.cmd.motor_cmd[i].dq = 0.0
-        #     self.cmd.motor_cmd[i].kd = 0.0
-            
+        
+        # # Send single command with all torques
         # self.cmd.crc = self.crc.Crc(self.cmd)
         # self.pub.Write(self.cmd)
 
-        # Set all motor modes to torque control
-        for i in range(12):
-            self.cmd.motor_cmd[i].mode = 0x01
-            self.cmd.motor_cmd[i].q = 0.0
-            self.cmd.motor_cmd[i].kp = 0.0
-            self.cmd.motor_cmd[i].dq = 0.0
-            self.cmd.motor_cmd[i].kd = 0.0
-            self.cmd.motor_cmd[i].tau = float(self.go2_torques[i])
-        
-        # Send single command with all torques
-        self.cmd.crc = self.crc.Crc(self.cmd)
-        self.pub.Write(self.cmd)
-
-    def execute_stand_up(self, phase):
+    def execute_stand_up(self):
         """Execute standing sequence"""
+        phase = np.tanh(self.running_time / 1.2)
         for i in range(12):
             self.cmd.motor_cmd[i].q = phase * self.stand_up_joint_pos[i] + \
                                      (1 - phase) * self.stand_down_joint_pos[i]
             self.cmd.motor_cmd[i].kp = phase * 50.0 + (1 - phase) * 20.0
             self.cmd.motor_cmd[i].dq = 0.0
             self.cmd.motor_cmd[i].kd = 3.5
-            
-        self.cmd.crc = self.crc.Crc(self.cmd)
-        self.pub.Write(self.cmd)
 
-        # Add small delay at end of standup to ensure stability
-        if phase > 0.99:
-            time.sleep(100.0)  # Let robot settle
+        # I want to publish the commands seperately based on running time    
+        # self.cmd.crc = self.crc.Crc(self.cmd)
+        # self.pub.Write(self.cmd)
 
     def _create_stance_ref(self):
         """Create standing reference for MPC"""
@@ -387,59 +349,4 @@ class Go2Controller:
         # print(f"Desired velocity: {desired_vel}")
 
         return x_ref
-
-
-    def _get_leg_indices(self, leg: str) -> List[int]:
-        """Get motor indices for given leg"""
-        indices = {
-            "FL": [0, 1, 2],
-            "FR": [3, 4, 5],
-            "RL": [6, 7, 8],
-            "RR": [9, 10, 11]
-        }
-        return indices[leg]
-    
-    def test_stance_torques(self):
-        """Test applying just constant stance torques"""
-        # Initialize command
-        self.cmd.head[0] = 0xFE
-        self.cmd.head[1] = 0xEF
-        self.cmd.level_flag = 0xFF
-        self.cmd.gpio = 0
-
-        # Apply simple upward torque to all legs
-        for leg in ["FR", "FL", "RR", "RL"]:
-            # For each motor in leg
-            hip_idx = go2.LegID[f"{leg}_0"]
-            thigh_idx = go2.LegID[f"{leg}_1"]
-            calf_idx = go2.LegID[f"{leg}_2"]
-
-            # Zero position control
-            self.cmd.motor_cmd[hip_idx].mode = 0x01
-            self.cmd.motor_cmd[hip_idx].q = 0
-            self.cmd.motor_cmd[hip_idx].kp = 0
-            self.cmd.motor_cmd[hip_idx].dq = 0
-            self.cmd.motor_cmd[hip_idx].kd = 0
-            
-            self.cmd.motor_cmd[thigh_idx].mode = 0x01
-            self.cmd.motor_cmd[thigh_idx].q = 0
-            self.cmd.motor_cmd[thigh_idx].kp = 0
-            self.cmd.motor_cmd[thigh_idx].dq = 0
-            self.cmd.motor_cmd[thigh_idx].kd = 0
-            
-            self.cmd.motor_cmd[calf_idx].mode = 0x01
-            self.cmd.motor_cmd[calf_idx].q = 0
-            self.cmd.motor_cmd[calf_idx].kp = 0
-            self.cmd.motor_cmd[calf_idx].dq = 0
-            self.cmd.motor_cmd[calf_idx].kd = 0
-
-            # Apply constant torques
-            self.cmd.motor_cmd[hip_idx].tau = 0.0  # No hip torque
-            self.cmd.motor_cmd[thigh_idx].tau = 15.0  # Push up with thigh
-            self.cmd.motor_cmd[calf_idx].tau = 10.0  # Push up with calf
-        
-        time.sleep(1.0)
-            
-        self.cmd.crc = self.crc.Crc(self.cmd)
-        self.pub.Write(self.cmd)
 
