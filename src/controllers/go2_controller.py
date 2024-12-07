@@ -97,10 +97,10 @@ class Go2Controller:
         self.crc = CRC()
 
         self.control_state = ControlState.STAND_UP
-        self.stand_start_time = None
-        self.last_mpc_update = 0
-        self.next_control_update = 0
-        self.running_time = 0.0
+        self.iterations_per_mpc = int(self.mpc_dt / self.control_dt)  # Should be 20
+        self.iteration_count = 0
+        self.running_time = 0
+
 
     def initialize_command(self):
         """Initialize command message"""
@@ -121,39 +121,30 @@ class Go2Controller:
     def run_control_loop(self):
         """Main 1kHz low-level Control Loop"""
         # First, run stand up
-        current_time = time.perf_counter()
-        self.stand_start_time = current_time
-        self.next_control_update = current_time
-        self.last_mpc_update = current_time
-    
         while True:
-            try:
-                current_time = time.perf_counter()
-                
-                # Wait until next 1 kHz control cycle
-                if current_time < self.next_control_update:
-                    continue
+            step_start = time.perf_counter()
+            # Update running time
+            self.running_time += self.control_dt
 
-                # Update running time
-                self.running_time = current_time - self.stand_start_time
-
-                # State machine for control modes
-                if self.control_state == ControlState.STAND_UP:
-                    # Stand up for first 3 seconds
-                    if self.running_time < 3.0:
-                        # Stand up phase
-                        self.execute_stand_up()
-                    else:
-                        print("Stand up complete, transitioning to normal operation")
-                        self.control_state = ControlState.NORMAL_OPERATION
+            # Increment iteration counter
+            self.iteration_count += 1
             
+            try:
+                # Stand up for first 3 seconds
+                if self.running_time < 3.0:
+                    # Stand up phase
+                    self.execute_stand_up()
+
                 # Now that were standing, enter into main control loop
-                elif self.control_state == ControlState.NORMAL_OPERATION:
+                # All of this will run at 1 Khz, and we only want to get new torques at 50Hz
+                else:
                     # Get state at 1 kHz
                     q, dq = self.state_estimator.get_state() 
                     
                     # Check if its time for MPC update (50 Hz)
-                    if current_time >= self.last_mpc_update + self.mpc_dt:
+                    if self.iteration_count % self.iteration_count == 0:
+                        print(f"Running MPC update at time: {self.running_time:.3f}")
+
                         # Update gait timing
                         self.gait_scheduler.update(self.mpc_dt)
 
@@ -163,36 +154,29 @@ class Go2Controller:
                         # Run the MPC update    
                         self.run_mpc_update(q, dq, x_ref)
 
-                        # Update timestep
-                        self.last_mpc_update += self.mpc_dt
-
-                    # Apply torques if MPC forces exist (1 kHz)
-                    if self.current_mpc_forces is not None:
-                        # Get current contact state from gait scheduler
-                        contact_state = self.gait_scheduler.get_current_contact_state()
+                    # Get contact state
+                    contact_state = self.gait_scheduler.get_current_contact_state()
                         
-                        # Update swing trajectories
-                        self.update_swing_trajectories(q, dq, x_ref, contact_state) 
+                    # Update swing trajectories
+                    self.update_swing_trajectories(q, dq, x_ref, contact_state)
+                        
+                    # Compute new torques (these will be applied until next MPC update)
+                    self.compute_leg_torques(q, dq, contact_state)
+                        
+                    # Apply current torques and send command (1 kHz)
+                    self.send_torques()  # This just copies self.torques to cmd
 
-                        # Compute leg torques
-                        self.compute_leg_torques(q, dq, contact_state)
-                
-                        # Send torques to be published
-                        self.send_torques()
-
-                # Send single command (either for stand or torque control)
                 self.cmd.crc = self.crc.Crc(self.cmd)
                 self.pub.Write(self.cmd)
 
-                # Update next control cycle time
-                self.next_control_update += self.control_dt
-
-                # Check if we're falling behind
-                if current_time > self.next_control_update:
-                    print(f"Control loop overtime: {(current_time - self.next_control_update)*1000:.2f} ms")
-                    # Reset timing if we're more than one cycle behind
-                    if current_time > self.next_control_update + self.control_dt:
-                        self.next_control_update = current_time + self.control_dt
+                # Enforce strict timing
+                elapsed = time.perf_counter() - step_start
+                time_until_next_step = self.control_dt - elapsed
+                
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
+                else:
+                    print(f"Control loop overtime: {elapsed*1000:.2f} ms")
 
             except Exception as e:
                 print(f"Control loop error: {e}")
@@ -265,8 +249,7 @@ class Go2Controller:
         for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
             idx = slice(i*3, (i+1)*3)  # Create slice object for cleaner indexing
             if contact_state[i] == 1:  # Stance
-                # Get forces for this leg from MPC horizon
-                
+                # Get forces for this leg from MPC horizon          
                 force = self.current_mpc_forces[idx]
                 print(f"\n{leg} Stance Force: {force}")
                 self.torques[idx] = self.force_mapper.compute_stance_torques(leg, q, dq, force)
@@ -290,10 +273,6 @@ class Go2Controller:
         # Apply to motors
         for i in range(12):
             self.cmd.motor_cmd[i].tau = float(self.go2_torques[i])
-        
-        # # Send single command with all torques
-        # self.cmd.crc = self.crc.Crc(self.cmd)
-        # self.pub.Write(self.cmd)
 
     def execute_stand_up(self):
         """Execute standing sequence"""
@@ -304,16 +283,6 @@ class Go2Controller:
             self.cmd.motor_cmd[i].kp = phase * 50.0 + (1 - phase) * 20.0
             self.cmd.motor_cmd[i].dq = 0.0
             self.cmd.motor_cmd[i].kd = 3.5
-
-        # I want to publish the commands seperately based on running time    
-        # self.cmd.crc = self.crc.Crc(self.cmd)
-        # self.pub.Write(self.cmd)
-
-    def _create_stance_ref(self):
-        """Create standing reference for MPC"""
-        x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
-        x_ref[2, :] = 0.3  # Desired COM height
-        return x_ref
     
     def _create_reference_trajectory(self, current_state, desired_vel):
         """Create linear reference trajectory for MPC horizon
@@ -341,12 +310,6 @@ class Go2Controller:
         
         # Set gravity state
         x_ref[12, :] = 9.81
-
-        # Debug print
-        # print("\nReference Trajectory Debug:")
-        # print(f"Initial position: {x_ref[0:3, 0]}")
-        # print(f"Final position: {x_ref[0:3, -1]}")
-        # print(f"Desired velocity: {desired_vel}")
 
         return x_ref
 
