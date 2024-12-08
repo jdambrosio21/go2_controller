@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import casadi as ca
 from numpy.typing import NDArray
@@ -77,8 +78,8 @@ class ConvexMPC():
         #     self.params.w_angular_vel, self.params.w_angular_vel, self.params.w_angular_vel, # Angular velocity
         #     0  # gravity state
         # ])
-        self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
-        #self.Q = ca.diag([0.25, 0.25, 10, 2, 2, 50, 0, 0, 0.3, 0.2, 0.2, 0.1, 0.0])
+        #self.Q = ca.diag([100,100,50,1,1,1,0,0,1,1,1,1,0]) 
+        self.Q = ca.diag([0.25, 0.25, 10, 2, 2, 50, 0, 0, 0.3, 0.2, 0.2, 0.1, 0.0])
         
         self.R = self.params.w_force * ca.DM.eye(self.n_inputs)
         
@@ -193,39 +194,6 @@ class ConvexMPC():
 
             self.opti.subject_to(self.X[:, k+1] == X_next)
     
-    # def add_contact_constraints(self):
-    #     """Adds constraints on forces for contact feet and friction cone"""
-        
-    #     for k in range(self.params.horizon_steps): #k-1
-    #         for i in range(4): # For each foot
-    #             f_i = self.U[i * 3:(i + 1) * 3, k]
-    #             contact = self.contact_sched[i, k]
-
-    #             # Apply vertical force constraint conditionally
-    #             self.opti.subject_to(
-    #                 f_i[2] >= ca.if_else(contact == 1, self.params.f_min, 0)
-    #             )
-    #             self.opti.subject_to(
-    #                 f_i[2] <= ca.if_else(contact == 1, self.params.f_max, 0)
-    #             )
-
-    #             # Friction cone constraint
-    #             self.opti.subject_to(
-    #                 f_i[0] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
-    #             )
-    #             self.opti.subject_to(
-    #                 f_i[0] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
-    #             )
-    #             self.opti.subject_to(
-    #                 f_i[1] >= ca.if_else(contact == 1, -self.params.mu * f_i[2], 0)
-    #             )
-    #             self.opti.subject_to(
-    #                 f_i[1] <= ca.if_else(contact == 1, self.params.mu * f_i[2], 0)
-    #             )
-
-    #             # Forces must be zero during swing phase
-    #             self.opti.subject_to(f_i == ca.if_else(contact == 1, f_i, [0, 0, 0]))
-
     def add_contact_constraints(self):
         for k in range(self.params.horizon_steps):
             for i in range(4):
@@ -242,12 +210,6 @@ class ConvexMPC():
                 self.opti.subject_to(f_i[1] <= self.params.mu * f_i[2])  # y force
                 self.opti.subject_to(f_i[1] >= -self.params.mu * f_i[2])
                 
-                # Zero force during swing
-                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
-                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
-                # self.opti.subject_to(ca.if_else(contact == 0, 0, True))
-                #self.opti.subject_to(f_i == ca.if_else(contact == 0, 0, f_i))
-
     def solve(self,
               x0: NDArray,
               x_ref: NDArray,
@@ -264,16 +226,26 @@ class ConvexMPC():
         Returns:
             Optimal forces for first time step [12] or None if failed
         """
+        osqp_opts = {
+            'verbose': False,
+            # 'eps_abs': 1e-3,
+            # 'eps_rel': 1e-3, 
+            # 'eps_prim_inf': 1e-4,
+            # #'max_iter': 4000,
+            # 'rho': 0.01,
+            # 'sigma': 1e-6,
+            # 'alpha': 4e-5,
+            # 'scaled_termination': False,
+            # 'check_termination': 25
+        }
 
         opts = {
-            'verbose': False,
-            # 'warm_start': True,
-            # 'polish': True,
-            # 'adaptive_rho': True
+            'osqp': osqp_opts  # Pass OSQP options in nested dict
         }
-        
+
+
         self.opti.solver('osqp', opts)
-        #self.opti.solver('qpoases', opts)
+        #self.opti.solver('qpoases')#, opts)
 
         try:
             # Set values
@@ -291,13 +263,18 @@ class ConvexMPC():
                 self.opti.set_initial(self.prev_sol.value_variables())
             
             print("\nAttempting to solve...")
+
+            # Add timing check
+            solve_start = time.perf_counter()
             sol = self.opti.solve()
+            solve_time = time.perf_counter() - solve_start
+
+            if solve_time < 1e-4:  # Too fast might indicate issues
+                print(f"Warning: Solve suspiciously fast ({solve_time*1000:.2f} ms)")
+                return None
+            
             self.prev_sol = sol # Warm Start
-            
             forces = sol.value(self.U)[:, 0]
-            # for i in range(4):
-            #     print(f"Leg {i} forces: {forces[i*3:(i+1)*3]}")
-            
             return forces
 
         except Exception as e:

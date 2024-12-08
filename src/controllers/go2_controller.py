@@ -34,25 +34,28 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=0.33, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=1.0, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
 
-        # Control Frequencies
-        self.mpc_dt = 0.02  # 50 Hz for MPC
-        self.control_dt = 0.001  # 1 kHz for leg control and planning
+        # Control timing (match MIT Cheetah)
+        self.dt = 0.001  # 1kHz base control rate
+        self.iterationsBetweenMPC = 30  # Run MPC every 30 control iterations
+        self.mpc_dt = self.dt * self.iterationsBetweenMPC  # MPC timestep
+        self.iteration_counter = 0
 
         # MPC Parameters
+        self.alpha = 4e-5  # Regularization
         self.mpc_horizon_steps = 10
-        mpc_params = MPCParams(
+        self.mpc_params = MPCParams(
             mass=self.robot.mass,
             I_body=self.robot.inertia,
-            dt=self.mpc_dt,
-            horizon_steps=self.mpc_horizon_steps,
+            dt=self.mpc_dt,  # Use MPC timestep
+            horizon_steps=self.mpc_horizon_steps
         )
 
-        self.mpc = ConvexMPC(mpc_params)
+        self.mpc = ConvexMPC(self.mpc_params)
 
         # Initialize state variables
         self.current_mpc_forces = None
@@ -138,12 +141,9 @@ class Go2Controller:
         self.crc = CRC()
 
         self.control_state = ControlState.STAND_UP
-        self.iterations_per_mpc = int(self.mpc_dt / self.control_dt)  # Should be 20
-        self.iteration_count = 0
         self.running_time = 0
         self.last_mpc_time = 0
         self.toggle = True  # Initial toggle state
-        self.last_mpc_time = time.perf_counter()  # Initialize with current time
 
     def initialize_command(self):
         """Initialize command message"""
@@ -168,40 +168,25 @@ class Go2Controller:
 
             try:
                 # Update running time
-                self.running_time += self.control_dt
-                
-                
+                self.running_time += self.dt
+                self.iteration_counter += 1
 
                 # Stand up for first 3 seconds
                 if self.running_time < 3.0:
                     self.execute_stand_up()
                     # Sleep between stand up and command send
-                    time.sleep(0.001)  # 1ms sleep
+                    time.sleep(self.dt)  # 1ms sleep
 
                 # Main control loop
                 else:
-                    current_time = time.perf_counter()
                     # Get state at 1 kHz
                     q, dq = self.state_estimator.get_state()
 
-                    # MPC Update at 50 Hz
-                    if current_time - self.last_mpc_time >= self.mpc_dt:
-                        # if self.toggle:
-                        #     self.current_torques = self.leg_torques1
-                        #     self.toggle = False
-                        # else:
-                        #     self.current_torques = self.leg_torques2
-                        #     self.toggle = True
+                    # Update MPC and get new forces
+                    x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
 
-                        self.gait_scheduler.update(self.mpc_dt)
-
-                        # Update MPC and get new forces
-                        x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
-                        self.run_mpc_update(q, dq, x_ref)
-
-
-                        self.last_mpc_time = current_time                    
-                    
+                    self.run_mpc_update(q, dq, x_ref)
+                    time.sleep(0.001)  # Optional: give solver and system a short break
                         
 
                     # # Control layer - 1 kHz operations
@@ -218,16 +203,13 @@ class Go2Controller:
                     # Apply current torques
                     self.send_torques()
 
-                        
-
                 # Send command with CRC
                 self.cmd.crc = self.crc.Crc(self.cmd)
                 self.pub.Write(self.cmd)
 
                 # Enforce loop timing with explicit sleep
                 elapsed = time.perf_counter() - step_start
-                sleep_time = self.control_dt - elapsed
-
+                sleep_time = self.dt - elapsed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
@@ -241,31 +223,42 @@ class Go2Controller:
     def run_mpc_update(self, q: np.ndarray, dq: np.ndarray, x_ref: np.ndarray):
         """Run MPC Update at desired Hz (50)"""
 
-        # Get contact schedule for horizon
-        contact_schedule = self.gait_scheduler.predict_horizon_contact_state(
-            self.mpc_dt, self.mpc_horizon_steps
-        )
+        if (self.iteration_counter % self.iterationsBetweenMPC) == 0:
+            print(f"\nMPC Update at iter {self.iteration_counter}")
 
-        # Plan footsteps for horizon
-        foot_pos_horizon = self.footstep_planner.plan_horizon_footsteps(
-            self.mpc_dt, self.mpc_horizon_steps, x_ref, self.q_nom, self.gait_scheduler
-        )
+            self.gait_scheduler.update(self.mpc_dt)
 
-        # Run MPC
-        rpy = self.robot.quat_to_rpy(q[3:7])
-        x0 = np.concatenate(
-            [
-                rpy,  # orientation
-                q[0:3],  # position
-                dq[3:6],  # angular velocity
-                dq[0:3],  # linear velocity
-                [9.81],  # gravity
-            ]
-        )
+            # Get contact schedule for horizon
+            contact_schedule = self.gait_scheduler.predict_horizon_contact_state(
+                self.mpc_dt, self.mpc_horizon_steps
+            )
 
-        self.current_mpc_forces = self.mpc.solve(
-            x0, x_ref, contact_schedule, foot_pos_horizon
-        )
+            # Plan footsteps for horizon
+            foot_pos_horizon = self.footstep_planner.plan_horizon_footsteps(
+                self.mpc_dt, self.mpc_horizon_steps, x_ref, self.q_nom, self.gait_scheduler
+            )
+
+            # Run MPC
+            rpy = self.robot.quat_to_rpy(q[3:7])
+            x0 = np.concatenate(
+                [
+                    rpy,  # orientation
+                    q[0:3],  # position
+                    dq[3:6],  # angular velocity
+                    dq[0:3],  # linear velocity
+                    [9.81],  # gravity
+                ]
+            )
+
+            # Only update forces if solve succeeds
+            try:
+                new_forces = self.mpc.solve(x0, x_ref, contact_schedule, foot_pos_horizon)
+                if new_forces is not None:
+                    self.current_mpc_forces = new_forces
+                    print("New MPC solution computed")
+            except Exception as e:
+                print(f"MPC solve failed: {e}")
+                # Keep using previous forces
 
     def update_swing_trajectories(
         self, q: np.ndarray, dq: np.ndarray, x_ref: np.ndarray, contact_state: List[int]
