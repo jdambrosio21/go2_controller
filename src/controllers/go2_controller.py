@@ -34,20 +34,20 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=1.0, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=0.3, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
 
         # Control timing (match MIT Cheetah)
         self.dt = 0.001  # 1kHz base control rate
-        self.iterationsBetweenMPC = 30  # Run MPC every 30 control iterations
+        self.iterationsBetweenMPC = 50  # Run MPC every 40 control iterations
         self.mpc_dt = self.dt * self.iterationsBetweenMPC  # MPC timestep
         self.iteration_counter = 0
 
         # MPC Parameters
         self.alpha = 4e-5  # Regularization
-        self.mpc_horizon_steps = 10
+        self.mpc_horizon_steps = 16
         self.mpc_params = MPCParams(
             mass=self.robot.mass,
             I_body=self.robot.inertia,
@@ -144,6 +144,7 @@ class Go2Controller:
         self.running_time = 0
         self.last_mpc_time = 0
         self.toggle = True  # Initial toggle state
+        self.phase = 0
 
     def initialize_command(self):
         """Initialize command message"""
@@ -174,19 +175,18 @@ class Go2Controller:
                 # Stand up for first 3 seconds
                 if self.running_time < 3.0:
                     self.execute_stand_up()
-                    # Sleep between stand up and command send
-                    time.sleep(self.dt)  # 1ms sleep
-
+                    
+                    
                 # Main control loop
                 else:
                     # Get state at 1 kHz
                     q, dq = self.state_estimator.get_state()
 
                     # Update MPC and get new forces
-                    x_ref = self._create_reference_trajectory(q, np.array([0.1, 0, 0]))
+                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
 
                     self.run_mpc_update(q, dq, x_ref)
-                    time.sleep(0.001)  # Optional: give solver and system a short break
+                    #time.sleep(0.001)  # Optional: give solver and system a short break
                         
 
                     # # Control layer - 1 kHz operations
@@ -200,12 +200,31 @@ class Go2Controller:
                         # Compute new torques
                         self.compute_leg_torques(q, dq, contact_state)
 
-                    # Apply current torques
-                    self.send_torques()
+                        # Apply current torques
+                        self.send_torques()
 
-                # Send command with CRC
+                # # Send command with CRC
+                # self.cmd.crc = self.crc.Crc(self.cmd)
+                # self.pub.Write(self.cmd)
+
+                # Add CRC debug
+                print("\nComputing CRC...")
+                before_crc = [self.cmd.motor_cmd[i].tau for i in range(12)]
                 self.cmd.crc = self.crc.Crc(self.cmd)
+                after_crc = [self.cmd.motor_cmd[i].tau for i in range(12)]
+                
+                print("Torques before/after CRC:")
+                for i in range(12):
+                    print(f"Motor {i}: {before_crc[i]} -> {after_crc[i]}")
+                    
                 self.pub.Write(self.cmd)
+                #time.sleep(0.001)
+
+                # print("\nFinal command bytes:")
+                # print(f"Head: {[hex(b) for b in self.cmd.head]}")
+                # print(f"Level flag: {hex(self.cmd.level_flag)}")
+                # raw_bytes = self.cmd.serialize()  # If there's a way to get raw bytes
+                # print(f"Raw command: {[hex(b) for b in raw_bytes]}")
 
                 # Enforce loop timing with explicit sleep
                 elapsed = time.perf_counter() - step_start
@@ -295,29 +314,6 @@ class Go2Controller:
                 # Stance, clear the trajectory
                 self.swing_trajectories[leg] = None
 
-    # def compute_leg_torques(
-    #     self, q: np.ndarray, dq: np.ndarray, contact_state: List[int]
-    # ) -> np.ndarray:
-    #     """Compute torques for all legs at 1 kHz"""
-
-    #     for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
-    #         idx = slice(i * 3, (i + 1) * 3)  # Create slice object for cleaner indexing
-    #         if contact_state[i] == 1:  # Stance
-    #             # Get forces for this leg from MPC horizon
-    #             force = self.current_mpc_forces[idx]
-    #             print(f"\n{leg} Stance Force: {force}")
-    #             self.torques[idx] = self.force_mapper.compute_stance_torques(
-    #                 leg, q, dq, force
-    #             )
-    #             print(f"{leg} Stance Torques: {self.torques[idx]}")
-    #         else:  # Swing
-    #             traj = self.swing_trajectories[leg]
-    #             if traj is not None:
-    #                 print(f"\n{leg} Swing Target: {traj.p}")
-    #                 self.torques[idx] = self.force_mapper.compute_swing_torques(
-    #                     leg, q, dq, traj.p, traj.v, traj.a
-    #                 )
-    #                 print(f"{leg} Swing Torques: {self.torques[idx]}")
 
     def compute_leg_torques(self, q, dq, contact_state):
         """Compute torques from MPC forces and store them"""
@@ -338,25 +334,46 @@ class Go2Controller:
 
     def send_torques(self):  # torques: np.ndarray):
         """Apply computed torques to the robot"""
+        # """Debug version"""
+        # print("\nBefore setting ANY torques:")
+        # for i in range(12):
+        #     print(f"Motor {i} tau: {self.cmd.motor_cmd[i].tau}")
+        
+        # # Only set FR leg
+        # print("\nSetting ONLY FR leg torques")
+        # for i in range(3):
+        #     self.cmd.motor_cmd[i].tau = float(self.current_torques['FR'][i])
+        #     print(f"Set motor {i} tau to: {self.cmd.motor_cmd[i].tau}")
+        
+        # print("\nAfter setting FR torques, all motors:")
+        # for i in range(12):
+        #     print(f"Motor {i} tau: {self.cmd.motor_cmd[i].tau}")
 
         # Apply to motors
         for i in range(3):
             self.cmd.motor_cmd[i].tau = float(self.current_torques['FR'][i])
             self.cmd.motor_cmd[i + 3].tau = float(self.current_torques['FL'][i])
             self.cmd.motor_cmd[i + 6].tau = float(self.current_torques['RR'][i])
-            self.cmd.motor_cmd[i + 9].tau = float(self.current_torques['RL'][i])        
+            self.cmd.motor_cmd[i + 9].tau = float(self.current_torques['RL'][i])   
+        for i in range(12):
+            self.cmd.motor_cmd[i].kd = 2.0
+            #self.cmd.motor_cmd[i].kp = self.phase * 50.0 + (1 - self.phase) * 20.0 
+            kp_crc = [self.cmd.motor_cmd[i].kp for i in range(12)]
+            print(f"Motor {i}: kp {kp_crc[i]}")    
+
 
     def execute_stand_up(self):
         """Execute standing sequence"""
-        phase = np.tanh(self.running_time / 1.2)
+        self.phase = np.tanh(self.running_time / 1.2)
         for i in range(12):
             self.cmd.motor_cmd[i].q = (
-                phase * self.stand_up_joint_pos[i]
-                + (1 - phase) * self.stand_down_joint_pos[i]
+                self.phase * self.stand_up_joint_pos[i]
+                + (1 - self.phase) * self.stand_down_joint_pos[i]
             )
-            self.cmd.motor_cmd[i].kp = phase * 50.0 + (1 - phase) * 20.0
+            self.cmd.motor_cmd[i].kp = self.phase * 50.0 + (1 - self.phase) * 20.0
             self.cmd.motor_cmd[i].dq = 0.0
             self.cmd.motor_cmd[i].kd = 3.5
+            self.cmd.motor_cmd[i].tau = 0.0
 
     def _create_reference_trajectory(self, current_state, desired_vel):
         """Create linear reference trajectory for MPC horizon"""
@@ -366,7 +383,7 @@ class Go2Controller:
         x_ref[0:3, 0] = current_state[0:3]  # Starting COM position
 
         # Set desired height
-        desired_height = 0.33
+        desired_height = 0.25
         x_ref[2, :] = desired_height  # Maintain constant height
 
         # Use a fixed dt for trajectory generation (e.g. 0.02s)

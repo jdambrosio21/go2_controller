@@ -20,7 +20,7 @@ class MPCParams:
 
     # Force limits
     f_min: float = 10.0          # Min vertical force
-    f_max: float = 100.0          # Max vertical force
+    f_max: float = 120.0          # Max vertical force
 
     # Weights for QP
     w_position = 100.0       # Position tracking weight
@@ -230,22 +230,32 @@ class ConvexMPC():
             'verbose': False,
             # 'eps_abs': 1e-3,
             # 'eps_rel': 1e-3, 
-            # 'eps_prim_inf': 1e-4,
-            # #'max_iter': 4000,
-            # 'rho': 0.01,
-            # 'sigma': 1e-6,
-            # 'alpha': 4e-5,
-            # 'scaled_termination': False,
-            # 'check_termination': 25
+            #'eps_prim_inf': 1e-4,
+            #'max_iter': 4000,
+            #'rho': 0.01,
+            #'sigma': 1e-6,
+            'alpha': 4e-5,
+            #'scaled_termination': False,
+            #'check_termination': 25
         }
+
+        qpoases_opts = {
+            'verbose': False,
+            'printLevel': 'none',
+            #'nWSR': 1000,
+            #'CPUtime': 0.1,
+            'sparse': True,
+            'epsRegularisation': 4e-5,  # Regularization parameter
+        }
+
 
         opts = {
             'osqp': osqp_opts  # Pass OSQP options in nested dict
         }
 
 
-        self.opti.solver('osqp', opts)
-        #self.opti.solver('qpoases')#, opts)
+        self.opti.solver('osqp')#, opts)
+        #self.opti.solver('qpoases', qpoases_opts)
 
         try:
             # Set values
@@ -265,13 +275,10 @@ class ConvexMPC():
             print("\nAttempting to solve...")
 
             # Add timing check
-            solve_start = time.perf_counter()
+            #solve_start = time.perf_counter()
             sol = self.opti.solve()
-            solve_time = time.perf_counter() - solve_start
+            #solve_time = time.perf_counter() - solve_start
 
-            if solve_time < 1e-4:  # Too fast might indicate issues
-                print(f"Warning: Solve suspiciously fast ({solve_time*1000:.2f} ms)")
-                return None
             
             self.prev_sol = sol # Warm Start
             forces = sol.value(self.U)[:, 0]

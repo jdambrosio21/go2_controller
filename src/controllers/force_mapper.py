@@ -103,12 +103,36 @@ class ForceMapper:
         tau = J.T @ (feedback + feedforward)
         return np.clip(tau, -self.tau_max, self.tau_max)
 
-    def compute_stance_torques(self, leg_id: str, q: np.ndarray, v: np.ndarray, 
+    def compute_stance_torques(self, leg_id: str, q: np.ndarray, dq: np.ndarray, 
                              force_des: np.ndarray):
         """Compute stance leg torques using cached Jacobian"""
         self.update_stance_cache(leg_id, q)
         force_des = np.array(force_des).reshape(3, 1)
-        tau = self.cached_J[leg_id].T @ self.cached_R[leg_id].T @ force_des
+
+        # Current state
+        joint_ids = self.leg_joint_indices[leg_id]
+        J = self.cached_J[leg_id]
+        R = self.cached_R[leg_id]
+
+        # Get current foot velocity from Jacobian 
+        v_foot = J @ dq[joint_ids]  # Current foot velocity in leg frame
+        
+        # Compute desired foot velocity - you can pass this in if you want
+        # or compute from reference trajectory
+        # For now let's use zero desired velocity in stance
+        v_des = np.zeros(3)
+        
+        # Compute force with feedback
+        force = force_des + self.Kd @ (v_des - v_foot).reshape(3,1)
+        
+        # Map to torques through Jacobian transpose
+        tau = J.T @ R.T @ force
+
+        # Add joint damping (from MIT impl)
+        # kd_joint = 0.2  # Joint damping gain
+        # tau_damping = -kd_joint * dq[joint_ids].reshape(3,1)
+        # tau = tau + tau_damping
+
         return np.clip(tau.flatten(), -self.tau_max, self.tau_max)
 
 if __name__ == "__main__":
