@@ -41,7 +41,7 @@ class Go2Controller:
 
         # Control timing (match MIT Cheetah)
         self.dt = 0.001  # 1kHz base control rate
-        self.iterationsBetweenMPC = 50  # Run MPC every 40 control iterations
+        self.iterationsBetweenMPC = 30  # Run MPC every 40 control iterations
         self.mpc_dt = self.dt * self.iterationsBetweenMPC  # MPC timestep
         self.iteration_counter = 0
 
@@ -183,7 +183,7 @@ class Go2Controller:
                     q, dq = self.state_estimator.get_state()
 
                     # Update MPC and get new forces
-                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
+                    x_ref = self._create_reference_trajectory(q, np.array([1.0, 0, 0]))
 
                     self.run_mpc_update(q, dq, x_ref)
                     #time.sleep(0.001)  # Optional: give solver and system a short break
@@ -203,28 +203,9 @@ class Go2Controller:
                         # Apply current torques
                         self.send_torques()
 
-                # # Send command with CRC
-                # self.cmd.crc = self.crc.Crc(self.cmd)
-                # self.pub.Write(self.cmd)
-
-                # Add CRC debug
-                print("\nComputing CRC...")
-                before_crc = [self.cmd.motor_cmd[i].tau for i in range(12)]
+                # Send command with CRC
                 self.cmd.crc = self.crc.Crc(self.cmd)
-                after_crc = [self.cmd.motor_cmd[i].tau for i in range(12)]
-                
-                print("Torques before/after CRC:")
-                for i in range(12):
-                    print(f"Motor {i}: {before_crc[i]} -> {after_crc[i]}")
-                    
                 self.pub.Write(self.cmd)
-                #time.sleep(0.001)
-
-                # print("\nFinal command bytes:")
-                # print(f"Head: {[hex(b) for b in self.cmd.head]}")
-                # print(f"Level flag: {hex(self.cmd.level_flag)}")
-                # raw_bytes = self.cmd.serialize()  # If there's a way to get raw bytes
-                # print(f"Raw command: {[hex(b) for b in raw_bytes]}")
 
                 # Enforce loop timing with explicit sleep
                 elapsed = time.perf_counter() - step_start
@@ -302,7 +283,7 @@ class Go2Controller:
                 # Ensuring we get new traj each time the leg starts swinging
                 if phase < 0.01 or self.swing_trajectories[leg] is None:
                     self.swing_trajectories[leg] = FootSwingTrajectory(
-                        foot_position[i], next_footholds[i], 0.05
+                        foot_position[i], next_footholds[i], 0.5
                     )
 
                 # Update the trajectory
@@ -334,32 +315,18 @@ class Go2Controller:
 
     def send_torques(self):  # torques: np.ndarray):
         """Apply computed torques to the robot"""
-        # """Debug version"""
-        # print("\nBefore setting ANY torques:")
-        # for i in range(12):
-        #     print(f"Motor {i} tau: {self.cmd.motor_cmd[i].tau}")
-        
-        # # Only set FR leg
-        # print("\nSetting ONLY FR leg torques")
-        # for i in range(3):
-        #     self.cmd.motor_cmd[i].tau = float(self.current_torques['FR'][i])
-        #     print(f"Set motor {i} tau to: {self.cmd.motor_cmd[i].tau}")
-        
-        # print("\nAfter setting FR torques, all motors:")
-        # for i in range(12):
-        #     print(f"Motor {i} tau: {self.cmd.motor_cmd[i].tau}")
+        # First, configure all motors for torque control
+        for i in range(12):
+            self.cmd.motor_cmd[i].q = self.stand_up_joint_pos[i]
+            self.cmd.motor_cmd[i].dq = 0.0
 
-        # Apply to motors
+        # Then apply the computed torques
         for i in range(3):
             self.cmd.motor_cmd[i].tau = float(self.current_torques['FR'][i])
             self.cmd.motor_cmd[i + 3].tau = float(self.current_torques['FL'][i])
             self.cmd.motor_cmd[i + 6].tau = float(self.current_torques['RR'][i])
-            self.cmd.motor_cmd[i + 9].tau = float(self.current_torques['RL'][i])   
-        for i in range(12):
-            self.cmd.motor_cmd[i].kd = 2.0
-            #self.cmd.motor_cmd[i].kp = self.phase * 50.0 + (1 - self.phase) * 20.0 
-            kp_crc = [self.cmd.motor_cmd[i].kp for i in range(12)]
-            print(f"Motor {i}: kp {kp_crc[i]}")    
+            self.cmd.motor_cmd[i + 9].tau = float(self.current_torques['RL'][i])
+        
 
 
     def execute_stand_up(self):

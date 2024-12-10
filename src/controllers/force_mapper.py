@@ -26,9 +26,9 @@ class ForceMapper:
         self.last_stance_q = {leg: None for leg in self.foot_frame_ids.keys()}
 
         # Control gains
-        self.Kp = np.diag([700, 700, 150])  
+        self.Kp = np.diag([70, 70, 70])  
         self.Kd = np.diag([7, 7, 7])      
-        #self.omega = 2.0  # Natural frequency for gain adaptation
+        self.omega = 3.0  # Natural frequency for gain adaptation
 
         # Torque limits
         self.tau_max = np.array([23.7, 23.7, 45.4])
