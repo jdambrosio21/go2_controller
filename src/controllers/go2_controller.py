@@ -183,7 +183,7 @@ class Go2Controller:
                     q, dq = self.state_estimator.get_state()
 
                     # Update MPC and get new forces
-                    x_ref = self._create_reference_trajectory(q, np.array([1.0, 0, 0]))
+                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
 
                     self.run_mpc_update(q, dq, x_ref)
                     #time.sleep(0.001)  # Optional: give solver and system a short break
@@ -302,16 +302,16 @@ class Go2Controller:
             idx = slice(i*3, (i+1)*3)
             if contact_state[i] == 1:  # Stance
                 force = self.current_mpc_forces[idx]
-                print(f"\n{leg} Stance Force: {force}")
+                #print(f"\n{leg} Stance Force: {force}")
                 self.current_torques[leg] = self.force_mapper.compute_stance_torques(leg, q, dq, force)
-                print(f"{leg} Stance Torques: {self.current_torques[leg]}")
+                #print(f"{leg} Stance Torques: {self.current_torques[leg]}")
             else:  # Swing
                 traj = self.swing_trajectories[leg]
                 if traj is not None:
                     self.current_torques[leg] = self.force_mapper.compute_swing_torques(
                         leg, q, dq, traj.p, traj.v, traj.a
                     )
-                    print(f"{leg} Swing Torques: {self.current_torques[leg]}")
+                    #print(f"{leg} Swing Torques: {self.current_torques[leg]}")
 
     def send_torques(self):  # torques: np.ndarray):
         """Apply computed torques to the robot"""
@@ -326,7 +326,13 @@ class Go2Controller:
             self.cmd.motor_cmd[i + 3].tau = float(self.current_torques['FL'][i])
             self.cmd.motor_cmd[i + 6].tau = float(self.current_torques['RR'][i])
             self.cmd.motor_cmd[i + 9].tau = float(self.current_torques['RL'][i])
-        
+        # self.cmd.motor_cmd[2].kp = 30
+        # self.cmd.motor_cmd[5].kp = 30
+        # self.cmd.motor_cmd[8].kp = 30
+        # self.cmd.motor_cmd[11].kp = 30
+
+
+
 
 
     def execute_stand_up(self):

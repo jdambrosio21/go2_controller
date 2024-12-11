@@ -26,9 +26,8 @@ class ForceMapper:
         self.last_stance_q = {leg: None for leg in self.foot_frame_ids.keys()}
 
         # Control gains
-        self.Kp = np.diag([70, 70, 70])  
-        self.Kd = np.diag([7, 7, 7])      
-        self.omega = 3.0  # Natural frequency for gain adaptation
+        self.Kp = np.diag([100.0, 100.0, 100.0]) * 1.2  # Moderate position gains
+        self.Kd = np.diag([2.0, 2.0, 2.0]) * 4.5 # Critical damping ratio
 
         # Torque limits
         self.tau_max = np.array([23.7, 23.7, 45.4])
@@ -69,6 +68,9 @@ class ForceMapper:
     def compute_swing_torques(self, leg_id: str, q: np.ndarray, v: np.ndarray, 
                             p_des: np.ndarray, v_des: np.ndarray, a_des: np.ndarray):
         """Compute swing leg torques using operational space control"""
+        print(f"\nSwing Phase Debug - {leg_id}")
+        print(f"Position error: {p_des - self.data.oMf[self.foot_frame_ids[leg_id]].translation}")
+        print(f"Velocity error: {v_des - pin.getFrameVelocity(self.model, self.data, self.foot_frame_ids[leg_id], pin.ReferenceFrame.LOCAL).linear}")
         frame_id = self.foot_frame_ids[leg_id]
         joint_ids = self.leg_joint_indices[leg_id]
         
@@ -78,16 +80,14 @@ class ForceMapper:
         
         # Get operational space inertia and update gains
         Lambda, J = self.compute_operational_space_inertia(leg_id, q)
-        # for i in range(3):
-        #     self.Kp[i,i] = self.omega**2 * Lambda[i,i]
-        
+
         # Current state
         p_current = self.data.oMf[frame_id].translation
         v_current = pin.getFrameVelocity(self.model, self.data, frame_id, 
                                        pin.ReferenceFrame.LOCAL).linear
         
         # Feedback term
-        feedback = self.Kp @ (p_des - p_current) + self.Kd @ (v_des - v_current)
+        feedback = self.Kp @ (p_des - p_current) + 0.8 * self.Kd @ (v_des - v_current)
         
         # Feedforward compensation
         pin.computeCoriolisMatrix(self.model, self.data, q, v)
