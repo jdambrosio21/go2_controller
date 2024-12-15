@@ -141,6 +141,46 @@ class Quadruped:
             hip_to_foot = foot_transform.translation - hip_transform.translation
             print(f"Hip to foot vector (world): {hip_to_foot}")
    
+
+    def get_foot_states(self, q: np.ndarray, dq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute foot positions and velocities in body frame
+        
+        Args:
+            q: Full robot configuration (19: 3 pos, 4 quat, 12 joints)
+            dq: Robot velocity (18: 3 base lin, 3 base ang, 12 joints)
+            
+        Returns:
+            p_foot: Foot positions in body frame (12: [FR, FL, RR, RL] x [x,y,z])
+            v_foot: Foot velocities in body frame (12: [FR, FL, RR, RL] x [x,y,z])
+        """
+        # Initialize outputs
+        p_foot = np.zeros(12)
+        v_foot = np.zeros(12)
+        
+        # Update kinematics
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        pin.computeJointJacobians(self.model, self.data, q)
+        
+        # Get base frame transformation
+        base_id = self.model.getFrameId('base')
+        base_H_world = self.data.oMf[base_id]
+        
+        # Compute for each foot
+        for i, leg in enumerate(['FR', 'FL', 'RR', 'RL']):
+            idx = slice(i*3, (i+1)*3)
+            foot_frame_id = self.leg_frame_ids["foot"][leg]
+            
+            # Get world frame position and transform to body frame 
+            p_world = self.data.oMf[foot_frame_id].translation
+            p_foot[idx] = base_H_world.inverse().act(p_world)
+            
+            # Get Jacobian and compute velocity
+            J = pin.getFrameJacobian(self.model, self.data, foot_frame_id, pin.ReferenceFrame.LOCAL)
+            v_foot[idx] = J[:3] @ dq  # Only need linear velocity terms
+        
+        return p_foot, v_foot
         
 if __name__ == "__main__":
     robot = Quadruped("/home/parallels/go2_controller/robots/go2_description/xacro/go2_generated.urdf") 
@@ -150,7 +190,24 @@ if __name__ == "__main__":
     
     # Define a test configuration vector with appropriate size
     q = np.zeros(robot.model.nq)  # Initialize to zeros
-    
+
+    stand_up_joint_pos = np.array(
+            [
+                -0.00571868,
+                0.608813,
+                -1.21763,  # FL
+                0.00571868,
+                0.608813,
+                -1.21763,  # FR
+                -0.00571868,
+                0.608813,
+                -1.21763,  # RL
+                0.00571868,
+                0.608813,
+                -1.21763,  # RR
+            ]
+        )
+    q[7:] = stand_up_joint_pos
     # Test get_hip_position for leg 0
     print("Hip position of leg 0:", robot.get_hip_position(q, 0))
     print("Hip position of leg 1:", robot.get_hip_position(q, 1))
@@ -168,10 +225,14 @@ if __name__ == "__main__":
     pin.forwardKinematics(robot.model, robot.data, q)
     pin.updateFramePlacements(robot.model, robot.data)
 
+    p_foot, v_foot = robot.get_foot_states(q, np.ones(18))
+    print(p_foot)
+    print(v_foot)
+
     print("\n=== Base Frame ===")
     base_frame_id = robot.model.getFrameId('base')
     base_transform = robot.data.oMf[base_frame_id]
-    print(f"Base Position: {base_transform.translation.WORLD}")
+    print(f"Base Position: {base_transform.translation}")
     print(f"Base Rotation:\n{base_transform.rotation}")
 
     # Print transforms for each leg

@@ -34,7 +34,7 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=0.3, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=0.33, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
@@ -47,7 +47,7 @@ class Go2Controller:
 
         # MPC Parameters
         self.alpha = 4e-5  # Regularization
-        self.mpc_horizon_steps = 16
+        self.mpc_horizon_steps = 11
         self.mpc_params = MPCParams(
             mass=self.robot.mass,
             I_body=self.robot.inertia,
@@ -180,7 +180,9 @@ class Go2Controller:
                 # Main control loop
                 else:
                     # Get state at 1 kHz
-                    q, dq = self.state_estimator.get_state()
+                    q, dq, p_foot, v_foot = self.state_estimator.get_state()
+
+                    #breakpoint()
 
                     # Update MPC and get new forces
                     x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
@@ -283,11 +285,11 @@ class Go2Controller:
                 # Ensuring we get new traj each time the leg starts swinging
                 if phase < 0.01 or self.swing_trajectories[leg] is None:
                     self.swing_trajectories[leg] = FootSwingTrajectory(
-                        foot_position[i], next_footholds[i], 0.5
+                        foot_position[i], next_footholds[i], 0.11
                     )
 
                 # Update the trajectory
-                self.swing_trajectories[leg].compute_swing_trajectory_bezier(
+                self.swing_trajectories[leg].compute_swing_trajectory(
                     phase, swing_duration
                 )
 
@@ -319,6 +321,8 @@ class Go2Controller:
         for i in range(12):
             self.cmd.motor_cmd[i].q = self.stand_up_joint_pos[i]
             self.cmd.motor_cmd[i].dq = 0.0
+            # self.cmd.motor_cmd[i].kd = 1.0
+            # self.cmd.motor_cmd[i].kp = 40.0
 
         # Then apply the computed torques
         for i in range(3):
@@ -353,22 +357,22 @@ class Go2Controller:
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
 
         # Set initial position to current position
-        x_ref[0:3, 0] = current_state[0:3]  # Starting COM position
+        x_ref[3:6, 0] = current_state[0:3]  # Starting COM position
 
         # Set desired height
-        desired_height = 0.25
-        x_ref[2, :] = desired_height  # Maintain constant height
+        desired_height = 0.33
+        x_ref[5, :] = desired_height  # Maintain constant height
 
         # Use a fixed dt for trajectory generation (e.g. 0.02s)
-        traj_dt = 0.02  
+        traj_dt = self.mpc_dt
         
         # Propagate position linearly based on desired velocity
         for k in range(1, self.mpc.params.horizon_steps + 1):
             dt = k * traj_dt  # Use fixed dt instead of mpc_dt
-            x_ref[0:3, k] = current_state[0:3] + desired_vel * dt
+            x_ref[3:6, k] = current_state[0:3] + desired_vel * dt
 
         # Set desired velocities (constant)
-        x_ref[6:9, :] = np.tile(desired_vel.reshape(3, 1), 
+        x_ref[9:12, :] = np.tile(desired_vel.reshape(3, 1), 
                             (1, self.mpc.params.horizon_steps + 1))
 
         # Set gravity state

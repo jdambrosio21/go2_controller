@@ -114,7 +114,27 @@ class Go2StateEstimator:
             dq[16] = self.low_state.motor_state[go2.LegID["RR_1"]].dq
             dq[17] = self.low_state.motor_state[go2.LegID["RR_2"]].dq
 
-            return q, dq
+            # foot pos and velocity
+            p_foot = np.zeros(12)
+            v_foot = np.zeros(12)
+
+            p_foot_temp = self.high_state.foot_position_body
+            v_foot_temp = self.high_state.foot_speed_body
+
+            
+
+            #re-order to match our indices
+            p_foot[0:3] = p_foot_temp[3:6]
+            p_foot[3:6] = p_foot_temp[0:3]
+            p_foot[6:9] = p_foot_temp[9:]
+            p_foot[9:]  = p_foot_temp[6:9]
+
+            v_foot[0:3] = v_foot_temp[3:6]
+            v_foot[3:6] = v_foot_temp[0:3]
+            v_foot[6:9] = v_foot_temp[9:]
+            v_foot[9:]  = v_foot_temp[6:9]
+
+            return q, dq, p_foot, v_foot
         
         except Exception as e:
             print(f"Error getting state {e}")

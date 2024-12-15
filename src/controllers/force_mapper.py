@@ -1,10 +1,12 @@
 import numpy as np
 import pinocchio as pin
+#from utils.quadruped import Quadruped
 
 class ForceMapper:
     def __init__(self, urdf_path: str):
         self.model = pin.buildModelFromUrdf(urdf_path, pin.JointModelFreeFlyer())
         self.data = self.model.createData()
+        #self.quadruped = Quadruped(urdf_path)
 
         self.foot_frame_ids = {
             'FR': self.model.getFrameId('FR_foot'),
@@ -26,8 +28,8 @@ class ForceMapper:
         self.last_stance_q = {leg: None for leg in self.foot_frame_ids.keys()}
 
         # Control gains
-        self.Kp = np.diag([100.0, 100.0, 100.0]) * 1.2  # Moderate position gains
-        self.Kd = np.diag([2.0, 2.0, 2.0]) * 4.5 # Critical damping ratio
+        self.Kp = np.diag([200.0, 200.0, 400.0])  # Moderate position gains
+        self.Kd = np.diag([15.0, 15.0, 15.0]) #* (7/20) # Critical damping ratio
 
         # Torque limits
         self.tau_max = np.array([23.7, 23.7, 45.4])
@@ -65,14 +67,72 @@ class ForceMapper:
         Lambda = np.linalg.inv(J @ np.linalg.inv(M_leg) @ J.T)
         return Lambda, J
 
+    def compute_foot_states(self, q: np.ndarray, dq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compute foot positions and velocities in body frame using Pinocchio
+        
+        Args:
+            q: Full robot configuration (19: 3 pos, 4 quat, 12 joints)
+            dq: Robot velocity (18: 3 base lin, 3 base ang, 12 joints)
+            
+        Returns:
+            p_foot: Foot positions in body frame (12: [FR, FL, RR, RL] x [x,y,z])
+            v_foot: Foot velocities in body frame (12: [FR, FL, RR, RL] x [x,y,z])
+        """
+        # Initialize outputs
+        p_foot = np.zeros(12)
+        v_foot = np.zeros(12)
+        
+        # Update pinocchio model
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        pin.computeJointJacobians(self.model, self.data, q)
+        
+        # Get base frame transformation
+        base_id = self.model.getFrameId('base')
+        base_H_world = self.data.oMf[base_id]
+        
+        # Compute for each foot
+        for i, leg in enumerate(['FL', 'FR', 'RL', 'RR']):
+            idx = slice(i*3, (i+1)*3)
+            frame_id = self.model.getFrameId(f'{leg}_foot')
+            
+            # Get world frame position and transform to body frame 
+            p_world = self.data.oMf[frame_id].translation
+            p_foot[idx] = base_H_world.inverse().act(p_world)
+            
+            # Get Jacobian and compute velocity
+            J = pin.getFrameJacobian(self.model, self.data, frame_id, pin.ReferenceFrame.LOCAL)
+            v_foot[idx] = J[:3] @ dq  # Only need linear velocity terms
+            
+        return p_foot, v_foot
+
     def compute_swing_torques(self, leg_id: str, q: np.ndarray, v: np.ndarray, 
                             p_des: np.ndarray, v_des: np.ndarray, a_des: np.ndarray):
         """Compute swing leg torques using operational space control"""
         print(f"\nSwing Phase Debug - {leg_id}")
-        print(f"Position error: {p_des - self.data.oMf[self.foot_frame_ids[leg_id]].translation}")
-        print(f"Velocity error: {v_des - pin.getFrameVelocity(self.model, self.data, self.foot_frame_ids[leg_id], pin.ReferenceFrame.LOCAL).linear}")
+        # print(f"Position error: {p_des - self.data.oMf[self.foot_frame_ids[leg_id]].translation}")
+        # print(f"Velocity error: {v_des - pin.getFrameVelocity(self.model, self.data, self.foot_frame_ids[leg_id], pin.ReferenceFrame.LOCAL).linear}")
+        
         frame_id = self.foot_frame_ids[leg_id]
         joint_ids = self.leg_joint_indices[leg_id]
+        
+        foot_pos_indices = {
+            'FL': [0, 1, 2],
+            'FR': [3, 4, 5],
+            'RL': [6, 7, 8],
+            'RR': [9, 10, 11]
+        }
+        
+        # p_current = p_foot_est[foot_pos_indices[leg_id]]
+        # v_current = v_foot_est[foot_pos_indices[leg_id]]
+
+        p_est, v_est = self.compute_foot_states(q, v)
+        p_current = p_est[foot_pos_indices[leg_id]]
+        v_current = v_est[foot_pos_indices[leg_id]]
+
+        
+        
         
         # Update dynamics
         pin.forwardKinematics(self.model, self.data, q, v)
@@ -80,14 +140,16 @@ class ForceMapper:
         
         # Get operational space inertia and update gains
         Lambda, J = self.compute_operational_space_inertia(leg_id, q)
+        
+        print(f"Position error: {p_des - p_current}")
+        print(f"Velocity error: {v_des - v_current}")
 
-        # Current state
-        p_current = self.data.oMf[frame_id].translation
-        v_current = pin.getFrameVelocity(self.model, self.data, frame_id, 
-                                       pin.ReferenceFrame.LOCAL).linear
+        # Then in compute_swing_torques, print the actual trajectory
+        print(f"Current swing height: {p_des[2]}")   
+        
         
         # Feedback term
-        feedback = self.Kp @ (p_des - p_current) + 0.8 * self.Kd @ (v_des - v_current)
+        feedback = self.Kp @ (p_des - p_current) + self.Kd @ (v_des - v_current)
         
         # Feedforward compensation
         pin.computeCoriolisMatrix(self.model, self.data, q, v)
@@ -129,9 +191,9 @@ class ForceMapper:
         tau = J.T @ R.T @ force
 
         # Add joint damping (from MIT impl)
-        # kd_joint = 0.2  # Joint damping gain
-        # tau_damping = -kd_joint * dq[joint_ids].reshape(3,1)
-        # tau = tau + tau_damping
+        kd_joint = 0.2  # Joint damping gain
+        tau_damping = -kd_joint * dq[joint_ids].reshape(3,1)
+        tau += tau_damping
 
         return np.clip(tau.flatten(), -self.tau_max, self.tau_max)
 
