@@ -28,11 +28,11 @@ class ForceMapper:
         self.last_stance_q = {leg: None for leg in self.foot_frame_ids.keys()}
 
         # Control gains
-        self.Kp = np.diag([200.0, 200.0, 400.0])  # Moderate position gains
-        self.Kd = np.diag([15.0, 15.0, 15.0]) #* (7/20) # Critical damping ratio
+        self.Kp = np.diag([1.0, 1.0, 1.0]) * 600 # Moderate position gains
+        self.Kd = np.diag([1.0, 1.0, 1.0]) * 0 # Critical damping ratio
 
         # Torque limits
-        self.tau_max = np.array([23.7, 23.7, 45.4])
+        self.tau_max = np.array([23.7, 23.7, 45.7])
 
     def update_stance_cache(self, leg_id: str, q: np.ndarray):
         """Update cached matrices for stance control if configuration changed"""
@@ -148,6 +148,7 @@ class ForceMapper:
         print(f"Current swing height: {p_des[2]}")   
         
         
+        
         # Feedback term
         feedback = self.Kp @ (p_des - p_current) + self.Kd @ (v_des - v_current)
         
@@ -185,7 +186,7 @@ class ForceMapper:
         v_des = np.zeros(3)
         
         # Compute force with feedback
-        force = force_des + self.Kd @ (v_des - v_foot).reshape(3,1)
+        force = force_des #+ self.Kd @ (v_des - v_foot).reshape(3,1)
         
         # Map to torques through Jacobian transpose
         tau = J.T @ R.T @ force
@@ -193,7 +194,7 @@ class ForceMapper:
         # Add joint damping (from MIT impl)
         kd_joint = 0.2  # Joint damping gain
         tau_damping = -kd_joint * dq[joint_ids].reshape(3,1)
-        tau += tau_damping
+        #tau += tau_damping
 
         return np.clip(tau.flatten(), -self.tau_max, self.tau_max)
 

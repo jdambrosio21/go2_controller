@@ -34,20 +34,20 @@ class Go2Controller:
     def __init__(self, urdf_path: str):
         # Initialize all control and planning components
         self.state_estimator = Go2StateEstimator()
-        self.gait_scheduler = GaitScheduler(total_period=0.33, gait_type="trot")
+        self.gait_scheduler = GaitScheduler(total_period=0.4, gait_type="trot")
         self.footstep_planner = FootstepPlanner(urdf_path)
         self.force_mapper = ForceMapper(urdf_path)
         self.robot = Quadruped(urdf_path)
 
         # Control timing (match MIT Cheetah)
         self.dt = 0.001  # 1kHz base control rate
-        self.iterationsBetweenMPC = 30  # Run MPC every 40 control iterations
+        self.iterationsBetweenMPC = 40  # Run MPC every 40 control iterations
         self.mpc_dt = self.dt * self.iterationsBetweenMPC  # MPC timestep
         self.iteration_counter = 0
 
         # MPC Parameters
         self.alpha = 4e-5  # Regularization
-        self.mpc_horizon_steps = 11
+        self.mpc_horizon_steps = 10
         self.mpc_params = MPCParams(
             mass=self.robot.mass,
             I_body=self.robot.inertia,
@@ -271,7 +271,7 @@ class Go2Controller:
 
         # Plan next footsteps for any legs currently in swing
         next_footholds = self.footstep_planner.plan_current_footsteps(
-            dq[0:3], x_ref[6:9, 0], q, self.gait_scheduler
+            dq[0:3], x_ref[9:12, 0], q, self.gait_scheduler
         )
 
         # Update each leg's swing trajectory
@@ -285,7 +285,7 @@ class Go2Controller:
                 # Ensuring we get new traj each time the leg starts swinging
                 if phase < 0.01 or self.swing_trajectories[leg] is None:
                     self.swing_trajectories[leg] = FootSwingTrajectory(
-                        foot_position[i], next_footholds[i], 0.11
+                        foot_position[i], next_footholds[i], 0.03
                     )
 
                 # Update the trajectory
@@ -321,8 +321,8 @@ class Go2Controller:
         for i in range(12):
             self.cmd.motor_cmd[i].q = self.stand_up_joint_pos[i]
             self.cmd.motor_cmd[i].dq = 0.0
-            # self.cmd.motor_cmd[i].kd = 1.0
-            # self.cmd.motor_cmd[i].kp = 40.0
+            #self.cmd.motor_cmd[i].kd = 3.5
+            #self.cmd.motor_cmd[i].kp = 100.0
 
         # Then apply the computed torques
         for i in range(3):

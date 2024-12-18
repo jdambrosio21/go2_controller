@@ -15,12 +15,12 @@ class MPCParams:
     # Robot params
     mass: float = 15.0          # Mass (should get from pinocchio instead)
     gravity: float = 9.81
-    mu: float = 0.6          # Friction Coeff.
+    mu: float = 1.0         # Friction Coeff.
     I_body: np.ndarray = None
 
     # Force limits
-    f_min: float = 10.0          # Min vertical force
-    f_max: float = 120.0          # Max vertical force
+    f_min: float = 1.0          # Min vertical force
+    f_max: float = 666.0          # Max vertical force
 
     # Weights for QP
     w_position = 100.0       # Position tracking weight
