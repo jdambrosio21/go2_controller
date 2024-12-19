@@ -61,7 +61,7 @@ class Go2StateEstimator:
             return None, None
         
         try:
-            print("Received state:")
+            #print("Received state:")
         
             # Base state from sport mode
             q = np.zeros(19) # 7 base + 12 joint

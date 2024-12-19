@@ -237,8 +237,10 @@ class Go2Controller:
 
             # Plan footsteps for horizon
             foot_pos_horizon = self.footstep_planner.plan_horizon_footsteps(
-                self.mpc_dt, self.mpc_horizon_steps, x_ref, self.q_nom, self.gait_scheduler
+                self.mpc_dt, self.mpc_horizon_steps, x_ref, self.q_nom, q, self.gait_scheduler
             )
+
+            #print(foot_pos_horizon)
 
             # Run MPC
             rpy = self.robot.quat_to_rpy(q[3:7])
@@ -252,12 +254,17 @@ class Go2Controller:
                 ]
             )
 
+            
+
             # Only update forces if solve succeeds
             try:
                 new_forces = self.mpc.solve(x0, x_ref, contact_schedule, foot_pos_horizon)
                 if new_forces is not None:
                     self.current_mpc_forces = new_forces
                     print("New MPC solution computed")
+                    # print("x0 state:", x0)
+                    # print("Contact schedule:", contact_schedule)
+                    # print("First timestep forces:", new_forces[:12] if new_forces is not None else None)
             except Exception as e:
                 print(f"MPC solve failed: {e}")
                 # Keep using previous forces
@@ -273,6 +280,9 @@ class Go2Controller:
         next_footholds = self.footstep_planner.plan_current_footsteps(
             dq[0:3], x_ref[9:12, 0], q, self.gait_scheduler
         )
+        #print(foot_position)
+        next_footholds[:, 2] = -0.35
+        #print(next_footholds)
 
         # Update each leg's swing trajectory
         for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
@@ -285,7 +295,7 @@ class Go2Controller:
                 # Ensuring we get new traj each time the leg starts swinging
                 if phase < 0.01 or self.swing_trajectories[leg] is None:
                     self.swing_trajectories[leg] = FootSwingTrajectory(
-                        foot_position[i], next_footholds[i], 0.03
+                        foot_position[i], next_footholds[i], 0.1
                     )
 
                 # Update the trajectory
@@ -321,8 +331,7 @@ class Go2Controller:
         for i in range(12):
             self.cmd.motor_cmd[i].q = self.stand_up_joint_pos[i]
             self.cmd.motor_cmd[i].dq = 0.0
-            #self.cmd.motor_cmd[i].kd = 3.5
-            #self.cmd.motor_cmd[i].kp = 100.0
+            
 
         # Then apply the computed torques
         for i in range(3):
@@ -355,27 +364,25 @@ class Go2Controller:
     def _create_reference_trajectory(self, current_state, desired_vel):
         """Create linear reference trajectory for MPC horizon"""
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
-
-        # Set initial position to current position
+        
+        # Set desired orientation (roll, pitch, yaw)
+        x_ref[0:2, :] = 0.0  # Keep roll and pitch at zero
+        x_ref[2, :] = current_state[2]  # Maintain current yaw
+        
+        # Set position trajectory
         x_ref[3:6, 0] = current_state[0:3]  # Starting COM position
-
-        # Set desired height
         desired_height = 0.33
         x_ref[5, :] = desired_height  # Maintain constant height
-
-        # Use a fixed dt for trajectory generation (e.g. 0.02s)
-        traj_dt = self.mpc_dt
         
-        # Propagate position linearly based on desired velocity
+        # Propagate position 
         for k in range(1, self.mpc.params.horizon_steps + 1):
-            dt = k * traj_dt  # Use fixed dt instead of mpc_dt
+            dt = k * self.mpc_dt
             x_ref[3:6, k] = current_state[0:3] + desired_vel * dt
-
-        # Set desired velocities (constant)
-        x_ref[9:12, :] = np.tile(desired_vel.reshape(3, 1), 
-                            (1, self.mpc.params.horizon_steps + 1))
-
-        # Set gravity state
+        
+        # Set velocities
+        x_ref[6:9, :] = 0.0  # Zero angular velocity for stability
+        x_ref[9:12, :] = np.tile(desired_vel.reshape(3, 1),
+                                (1, self.mpc.params.horizon_steps + 1))
+        
         x_ref[12, :] = 9.81
-
         return x_ref

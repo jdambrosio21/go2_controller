@@ -19,8 +19,8 @@ class MPCParams:
     I_body: np.ndarray = None
 
     # Force limits
-    f_min: float = 1.0          # Min vertical force
-    f_max: float = 666.0          # Max vertical force
+    f_min: float = 10.0          # Min vertical force
+    f_max: float = 232.0          # Max vertical force
 
     # Weights for QP
     w_position = 100.0       # Position tracking weight

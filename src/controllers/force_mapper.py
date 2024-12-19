@@ -28,8 +28,8 @@ class ForceMapper:
         self.last_stance_q = {leg: None for leg in self.foot_frame_ids.keys()}
 
         # Control gains
-        self.Kp = np.diag([1.0, 1.0, 1.0]) * 600 # Moderate position gains
-        self.Kd = np.diag([1.0, 1.0, 1.0]) * 0 # Critical damping ratio
+        self.Kp = np.diag([1.0, 1.0, 1.0]) * 1300 # Moderate position gains
+        self.Kd = np.diag([1.0, 1.0, 1.0]) * 10 # Critical damping ratio
 
         # Torque limits
         self.tau_max = np.array([23.7, 23.7, 45.7])
@@ -110,7 +110,7 @@ class ForceMapper:
     def compute_swing_torques(self, leg_id: str, q: np.ndarray, v: np.ndarray, 
                             p_des: np.ndarray, v_des: np.ndarray, a_des: np.ndarray):
         """Compute swing leg torques using operational space control"""
-        print(f"\nSwing Phase Debug - {leg_id}")
+        #print(f"\nSwing Phase Debug - {leg_id}")
         # print(f"Position error: {p_des - self.data.oMf[self.foot_frame_ids[leg_id]].translation}")
         # print(f"Velocity error: {v_des - pin.getFrameVelocity(self.model, self.data, self.foot_frame_ids[leg_id], pin.ReferenceFrame.LOCAL).linear}")
         
@@ -141,11 +141,12 @@ class ForceMapper:
         # Get operational space inertia and update gains
         Lambda, J = self.compute_operational_space_inertia(leg_id, q)
         
-        print(f"Position error: {p_des - p_current}")
-        print(f"Velocity error: {v_des - v_current}")
+        # print(f"Actual position: {p_current}")
+        # print(f"Desired position: {p_des}")
+        # print(f"Raw error: {p_des - p_current}")    
 
         # Then in compute_swing_torques, print the actual trajectory
-        print(f"Current swing height: {p_des[2]}")   
+        #print(f"Current swing height: {p_des[2]}")   
         
         
         

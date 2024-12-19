@@ -4,13 +4,13 @@ from planners.gait_scheduler import GaitScheduler
 from utils.quadruped import Quadruped
 
 class FootstepPlanner:
-    def __init__(self, urdf_path: str, k_raibert = 0.03):
+    def __init__(self, urdf_path: str, k_raibert = 0.1):
       self.n_legs = 4
       self.k_raibert = k_raibert
       self.next_footholds = np.zeros((4, 3))
       self.quadruped = Quadruped(urdf_path)
 
-    def raibert_heuristic(self, leg: int, stance_dur: float, com_vel: np.ndarray, desired_vel: np.ndarray, q: np.ndarray):
+    def raibert_heuristic(self, leg: int, stance_dur: float, com_vel: np.ndarray, desired_vel: np.ndarray, q: np.ndarray, for_mpc: bool = False):
         """
         Plans footsteps using Raibert Heuristic
 
@@ -26,10 +26,14 @@ class FootstepPlanner:
         """
 
         # Get hip position
-        p_ref = self.quadruped.get_hip_position(q, leg)
+        # Get hip position in appropriate frame
+        if for_mpc:
+            p_ref = self.quadruped.get_hip_position_world(q, leg)
+        else:
+            p_ref = self.quadruped.get_hip_position(q, leg)
+        com_vel[-1] = 0
 
         p_vel = com_vel * (stance_dur / 2)
-
         # will be zero for planned steps, and non zero for instantaneous footstep planning
         p_correction = (com_vel - desired_vel) * self.k_raibert 
 
@@ -65,11 +69,11 @@ class FootstepPlanner:
             # If in swing:
             else:
                 # Plan next footstep with raibert heuristic
-                footsteps[i, :] = self.raibert_heuristic(i, stance_duration, com_vel, desired_vel, q_curr)
+                footsteps[i, :] = self.raibert_heuristic(i, stance_duration, com_vel, desired_vel, q_curr, for_mpc=False)
         
         return footsteps
     
-    def plan_horizon_footsteps(self, dt: float, horizon: int, ref_traj: np.ndarray, q_nom: np.ndarray, gait_scheduler: GaitScheduler):
+    def plan_horizon_footsteps(self, dt: float, horizon: int, ref_traj: np.ndarray, q_nom: np.ndarray, q_curr: np.ndarray, gait_scheduler: GaitScheduler):
         """
             Plans footsteps for entire MPC horizon to be used in calculations
 
@@ -92,16 +96,16 @@ class FootstepPlanner:
 
         # For each knot point, get configuration to get hip positions
         for k in range(horizon):
-            q_plan[0:3] = ref_traj[0:3, k] # CoM Pos
-            com_vel = ref_traj[6:9, k]
+            q_plan[0:3] = ref_traj[3:6, k] # CoM Pos
+            com_vel = ref_traj[9:12, k]
 
             # Check each leg at current configuration
             for i in range(4):
                 if horizon_contact_state[i, k] == 1: # In stance
-                    horizon_footsteps[i*3:(i+1)*3, k] = self.quadruped.get_foot_positions(q_plan)[i]
+                    horizon_footsteps[i*3:(i+1)*3, k] = self.quadruped.get_foot_positions_world(q_plan)[i]
                 
                 else: # In swing
-                    p_des = self.raibert_heuristic(i, stance_dur, com_vel, com_vel, q_plan)
+                    p_des = self.raibert_heuristic(i, stance_dur, com_vel, com_vel, q_plan, for_mpc=True)
                     horizon_footsteps[i*3:(i+1)*3, k] = p_des
 
         return horizon_footsteps 

@@ -49,33 +49,33 @@ class FootSwingTrajectory:
         self.a = np.zeros(3)  # Acceleration
 
     def compute_swing_trajectory(self, phase: float, swing_time: float):
-        """Compute foot swing trajectory using Bezier curves like MIT Cheetah
-        Args:
-            phase: How far along we are in the swing (0 to 1)
-            swing_time: How long the swing should take (seconds)
-        """
-        # Compute XY motion using single Bezier
-        self.p[0:2] = cubic_bezier(self.p0[0:2], self.pf[0:2], phase)
-        self.v[0:2] = cubic_bezier_first_derivative(self.p0[0:2], self.pf[0:2], phase) / swing_time
-        self.a[0:2] = cubic_bezier_second_derivative(self.p0[0:2], self.pf[0:2], phase) / (swing_time * swing_time)
-
-        # Split Z motion into two phases like MIT implementation
+        """Compute foot swing trajectory with split z-trajectory like MIT"""
+        # XY motion
+        xy =cubic_bezier(self.p0[0:2], self.pf[0:2], phase)
+        xy_vel = cubic_bezier_first_derivative(self.p0[0:2], self.pf[0:2], phase) / swing_time
+        xy_acc = cubic_bezier_second_derivative(self.p0[0:2], self.pf[0:2], phase) / (swing_time * swing_time)
+        
+        # Split Z trajectory
         if phase < 0.5:
-            # First half: go from start to apex
-            t = phase * 2  # Rescale phase to [0,1] for first half
-            z0 = np.array([self.p0[2]])
+            # First half - go from start to apex
+            t = phase * 2.0  # Rescale phase to [0,1] 
+            z0 = np.array([self.p0[2]]) 
             z1 = np.array([self.p0[2] + self.height])
             
-            self.p[2] = cubic_bezier(z0, z1, t)[0]
-            self.v[2] = cubic_bezier_first_derivative(z0, z1, t)[0] * 2 / swing_time  # Factor of 2 from chain rule
-            self.a[2] = cubic_bezier_second_derivative(z0, z1, t)[0] * 4 / (swing_time * swing_time)  # Factor of 4
+            z = cubic_bezier(z0, z1, t)[0]
+            z_vel = cubic_bezier_first_derivative(z0, z1, t)[0] * 2.0 / swing_time
+            z_acc = cubic_bezier_second_derivative(z0, z1, t)[0] * 4.0 / (swing_time * swing_time)
             
         else:
-            # Second half: go from apex to end
-            t = phase * 2 - 1  # Rescale phase to [0,1] for second half
+            # Second half - go from apex to final
+            t = phase * 2.0 - 1.0  # Rescale phase to [0,1]
             z0 = np.array([self.p0[2] + self.height])
             z1 = np.array([self.pf[2]])
             
-            self.p[2] = cubic_bezier(z0, z1, t)[0]
-            self.v[2] = cubic_bezier_first_derivative(z0, z1, t)[0] * 2 / swing_time
-            self.a[2] = cubic_bezier_second_derivative(z0, z1, t)[0] * 4 / (swing_time * swing_time)
+            z = cubic_bezier(z0, z1, t)[0]
+            z_vel = cubic_bezier_first_derivative(z0, z1, t)[0] * 2.0 / swing_time
+            z_acc = cubic_bezier_second_derivative(z0, z1, t)[0] * 4.0 / (swing_time * swing_time)
+
+        self.p = np.array([xy[0], xy[1], z]) 
+        self.v = np.array([xy_vel[0], xy_vel[1], z_vel])
+        self.a = np.array([xy_acc[0], xy_acc[1], z_acc])
