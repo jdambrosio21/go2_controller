@@ -185,7 +185,7 @@ class Go2Controller:
                     #breakpoint()
 
                     # Update MPC and get new forces
-                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0, 0]))
+                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0.0, 0.0]))
 
                     self.run_mpc_update(q, dq, x_ref)
                     #time.sleep(0.001)  # Optional: give solver and system a short break
@@ -281,7 +281,7 @@ class Go2Controller:
             dq[0:3], x_ref[9:12, 0], q, self.gait_scheduler
         )
         #print(foot_position)
-        next_footholds[:, 2] = -0.35
+        next_footholds[:, 2] = -.2
         #print(next_footholds)
 
         # Update each leg's swing trajectory
@@ -295,7 +295,7 @@ class Go2Controller:
                 # Ensuring we get new traj each time the leg starts swinging
                 if phase < 0.01 or self.swing_trajectories[leg] is None:
                     self.swing_trajectories[leg] = FootSwingTrajectory(
-                        foot_position[i], next_footholds[i], 0.1
+                        foot_position[i, :], next_footholds[i, :], 0.1
                     )
 
                 # Update the trajectory
@@ -366,8 +366,8 @@ class Go2Controller:
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
         
         # Set desired orientation (roll, pitch, yaw)
-        x_ref[0:2, :] = 0.0  # Keep roll and pitch at zero
-        x_ref[2, :] = current_state[2]  # Maintain current yaw
+        # x_ref[0:2, :] = 0.0  # Keep roll and pitch at zero
+        # x_ref[2, :] = current_state[2]  # Maintain current yaw
         
         # Set position trajectory
         x_ref[3:6, 0] = current_state[0:3]  # Starting COM position
@@ -376,13 +376,15 @@ class Go2Controller:
         
         # Propagate position 
         for k in range(1, self.mpc.params.horizon_steps + 1):
+            x_ref[0:3, k] = np.zeros(3)
+
             dt = k * self.mpc_dt
             x_ref[3:6, k] = current_state[0:3] + desired_vel * dt
         
-        # Set velocities
-        x_ref[6:9, :] = 0.0  # Zero angular velocity for stability
-        x_ref[9:12, :] = np.tile(desired_vel.reshape(3, 1),
-                                (1, self.mpc.params.horizon_steps + 1))
+            # Set velocities
+            x_ref[6:9, k] = np.zeros(3) # Zero angular velocity for stability
+            x_ref[9:12, k] = desired_vel
+                                
         
-        x_ref[12, :] = 9.81
+            x_ref[12, k] = 9.81
         return x_ref

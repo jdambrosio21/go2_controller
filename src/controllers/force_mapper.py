@@ -141,9 +141,9 @@ class ForceMapper:
         # Get operational space inertia and update gains
         Lambda, J = self.compute_operational_space_inertia(leg_id, q)
         
-        # print(f"Actual position: {p_current}")
-        # print(f"Desired position: {p_des}")
-        # print(f"Raw error: {p_des - p_current}")    
+        print(f"Actual position: {p_current}")
+        print(f"Desired position: {p_des}")
+        print(f"Raw error: {p_des - p_current}")    
 
         # Then in compute_swing_torques, print the actual trajectory
         #print(f"Current swing height: {p_des[2]}")   

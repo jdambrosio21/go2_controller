@@ -31,7 +31,6 @@ class FootstepPlanner:
             p_ref = self.quadruped.get_hip_position_world(q, leg)
         else:
             p_ref = self.quadruped.get_hip_position(q, leg)
-        com_vel[-1] = 0
 
         p_vel = com_vel * (stance_dur / 2)
         # will be zero for planned steps, and non zero for instantaneous footstep planning

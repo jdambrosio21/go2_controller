@@ -136,7 +136,9 @@ class ConvexMPC():
         # Create B matrix (13 x 3n) n = 4 contact points for 4 legs
         B = ca.MX.zeros((13, 12))
         # Use r directly without nested unpacking
-        I_r_x = [ca.mtimes(ca.inv(ca.diag(self.I_body_ca)), ca.skew(r[3 * i : 3 * (i + 1)])) for i in range(4)]
+        #I_r_x = [ca.mtimes(ca.inv(ca.diag(self.I_body_ca)), ca.skew(r[3 * i : 3 * (i + 1)])) for i in range(4)]
+        I_r_x = [ca.mtimes(ca.inv(self.I_body_ca), ca.skew(r[3 * i : 3 * (i + 1)])) for i in range(4)]
+
         B[6:9, :] = ca.horzcat(*I_r_x)
         B[9:12, :] = ca.repmat(ca.MX.eye(3) * (1 / self.params.mass), 1, 4)
 

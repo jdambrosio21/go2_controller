@@ -31,12 +31,13 @@ class Quadruped:
         v = pin.utils.zero(self.model.nv)
 
         self.mass = pin.computeTotalMass(self.model, self.data)
-        pin.ccrba(self.model, self.data, q, v)
-        self.inertia_p = self.data.Ig.inertia
-        self.inertia = np.zeros(3)
-        self.inertia[0] = self.inertia_p[0, 0]
-        self.inertia[1] = self.inertia_p[1, 1]
-        self.inertia[2] = self.inertia_p[2, 2]
+        pin.crba(self.model, self.data, q)
+        # self.inertia_p = self.data.Ig.inertia
+        # self.inertia = np.zeros(3)
+        # self.inertia[0] = self.inertia_p[0, 0]
+        # self.inertia[1] = self.inertia_p[1, 1]
+        # self.inertia[2] = self.inertia_p[2, 2]
+        self.inertia = self.data.M[3:6, 3:6]
 
 
     def get_hip_position_world(self, q: np.ndarray, leg: int):

@@ -85,6 +85,7 @@ def main():
             mpc_horizon,
             ref_traj,
             q_nom,
+            q_current,
             gait_scheduler
         )
         horizon_footsteps_history.append(horizon_footsteps)
