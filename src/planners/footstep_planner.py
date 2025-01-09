@@ -4,7 +4,7 @@ from planners.gait_scheduler import GaitScheduler
 from utils.quadruped import Quadruped
 
 class FootstepPlanner:
-    def __init__(self, urdf_path: str, k_raibert = 0.1):
+    def __init__(self, urdf_path: str, k_raibert = 0.3):
       self.n_legs = 4
       self.k_raibert = k_raibert
       self.next_footholds = np.zeros((4, 3))
@@ -24,19 +24,28 @@ class FootstepPlanner:
         Returns:
             p_des: [3 x 1] desired position of robots foot
         """
+        # Project velocities to xy plane by zeroing z component
+        com_vel_xy = com_vel.copy()
+        com_vel_xy[2] = 0
+        desired_vel_xy = desired_vel.copy()
+        desired_vel_xy[2] = 0
 
-        # Get hip position
         # Get hip position in appropriate frame
         if for_mpc:
             p_ref = self.quadruped.get_hip_position_world(q, leg)
         else:
             p_ref = self.quadruped.get_hip_position(q, leg)
 
-        p_vel = com_vel * (stance_dur / 2)
-        # will be zero for planned steps, and non zero for instantaneous footstep planning
-        p_correction = (com_vel - desired_vel) * self.k_raibert 
+        # Calculate step using projected velocities
+        p_vel = com_vel_xy * (stance_dur / 2)
+        p_correction = (desired_vel_xy - com_vel_xy) * self.k_raibert 
+
+        print("p_ref: \n", p_ref)
 
         p_des = p_ref + p_vel + p_correction
+        
+        # Keep the original z-height
+        p_des[2] = p_ref[2]
 
         return p_des
     

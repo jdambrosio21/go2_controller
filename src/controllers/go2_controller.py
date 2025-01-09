@@ -146,6 +146,12 @@ class Go2Controller:
         self.toggle = True  # Initial toggle state
         self.phase = 0
 
+        # Initialize trajectory parameters
+        self.target_vel = np.array([0.0, 0.0, 0.0])  # Initial target velocity
+        self.world_position_desired = np.zeros(3)  # Track desired position
+        self.dt_trajectory = self.mpc_dt  # Use MPC timestep for trajectory
+
+
     def initialize_command(self):
         """Initialize command message"""
         self.cmd.head[0] = 0xFE
@@ -182,10 +188,19 @@ class Go2Controller:
                     # Get state at 1 kHz
                     q, dq, p_foot, v_foot = self.state_estimator.get_state()
 
-                    #breakpoint()
+                    # Update reference with current target velocity
+                    x_ref = self.update_reference_trajectory(q, np.array([0.6, 0.0, 0.0]))
 
-                    # Update MPC and get new forces
-                    x_ref = self._create_reference_trajectory(q, np.array([0.5, 0.0, 0.0]))
+                    # # Print comparison
+                    # print("\nState Estimation vs Reference:")
+                    # print(f"COM Position - Estimated: {q[0:3]}, Reference: {x_ref[3:6,0]}")
+                    # print(f"COM Velocity - Estimated: {dq[0:3]}, Reference: {x_ref[9:12,0]}")
+                    
+                    # # Check if there's significant drift
+                    # pos_error = np.linalg.norm(q[0:3] - x_ref[3:6,0])
+                    # vel_error = np.linalg.norm(dq[0:3] - x_ref[9:12,0])
+                    # print(f"Position Error: {pos_error:.3f}m")
+                    # print(f"Velocity Error: {vel_error:.3f}m/s")
 
                     self.run_mpc_update(q, dq, x_ref)
                     #time.sleep(0.001)  # Optional: give solver and system a short break
@@ -240,7 +255,7 @@ class Go2Controller:
                 self.mpc_dt, self.mpc_horizon_steps, x_ref, self.q_nom, q, self.gait_scheduler
             )
 
-            #print(foot_pos_horizon)
+            print("MPC Foot Positions: \n", foot_pos_horizon)
 
             # Run MPC
             rpy = self.robot.quat_to_rpy(q[3:7])
@@ -280,9 +295,8 @@ class Go2Controller:
         next_footholds = self.footstep_planner.plan_current_footsteps(
             dq[0:3], x_ref[9:12, 0], q, self.gait_scheduler
         )
-        #print(foot_position)
-        next_footholds[:, 2] = -.2
-        #print(next_footholds)
+        print("Foot Positions: \n", foot_position)
+        print("Next Footholds: \n", next_footholds)
 
         # Update each leg's swing trajectory
         for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
@@ -362,29 +376,56 @@ class Go2Controller:
             self.cmd.motor_cmd[i].tau = 0.0
 
     def _create_reference_trajectory(self, current_state, desired_vel):
-        """Create linear reference trajectory for MPC horizon"""
         x_ref = np.zeros((13, self.mpc.params.horizon_steps + 1))
         
-        # Set desired orientation (roll, pitch, yaw)
-        # x_ref[0:2, :] = 0.0  # Keep roll and pitch at zero
-        # x_ref[2, :] = current_state[2]  # Maintain current yaw
-        
-        # Set position trajectory
+        # Set initial state
         x_ref[3:6, 0] = current_state[0:3]  # Starting COM position
+        
+        # Desired height remains constant
         desired_height = 0.33
-        x_ref[5, :] = desired_height  # Maintain constant height
+        x_ref[5, :] = desired_height
         
-        # Propagate position 
+        # Propagate position based on desired velocity
         for k in range(1, self.mpc.params.horizon_steps + 1):
-            x_ref[0:3, k] = np.zeros(3)
-
             dt = k * self.mpc_dt
-            x_ref[3:6, k] = current_state[0:3] + desired_vel * dt
+            # Only propagate x,y - keep z at desired height
+            x_ref[3:5, k] = current_state[0:2] + desired_vel[0:2] * dt
         
-            # Set velocities
-            x_ref[6:9, k] = np.zeros(3) # Zero angular velocity for stability
-            x_ref[9:12, k] = desired_vel
+        # Set velocity reference - THIS IS CRUCIAL
+        x_ref[9:12, :] = np.tile(desired_vel.reshape(3, 1), 
+                            (1, self.mpc.params.horizon_steps + 1))
                                 
         
-            x_ref[12, k] = 9.81
+        x_ref[12, :] = 9.81
+
+        return x_ref
+    
+    def update_reference_trajectory(self, current_state, target_vel):
+        """Update reference trajectory using receding horizon"""
+        x_ref = np.zeros((13, self.mpc_horizon_steps + 1))
+        
+        # Start from current position
+        x_ref[3:6, 0] = current_state[0:3]
+        
+        # Set desired height
+        x_ref[5, 0] = 0.33
+        
+        # Create trajectory horizon relative to current position
+        for k in range(1, self.mpc_horizon_steps + 1):
+            dt = k * self.mpc_dt
+            # Only propagate x,y from current position
+            x_ref[3:5, k] = current_state[0:2] + target_vel[0:2] * dt
+            # Keep desired height
+            x_ref[5, k] = 0.33
+        
+        # Set velocity reference
+        x_ref[9:12, :] = np.tile(target_vel.reshape(3, 1), 
+                                (1, self.mpc_horizon_steps + 1))
+        
+        print("\nTrajectory Debug:")
+        print(f"Current position: {current_state[0:3]}")
+        print(f"End of horizon position: {x_ref[3:6, -1]}")
+        print(f"Position difference: {x_ref[3:6, -1] - current_state[0:3]}")
+        print(f"Target velocity: {target_vel}")
+        
         return x_ref

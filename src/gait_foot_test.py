@@ -45,63 +45,56 @@ def main():
     contact_states = np.zeros((4, steps))
     horizon_footsteps_history = []  # Store MPC predictions
     
-    # Initial state
-    stand_up_joint_pos = np.array([
-            0.00571868, 0.608813, -1.21763,     # FR
-            -0.00571868, 0.608813, -1.21763,    # FL
-            0.00571868, 0.608813, -1.21763,     # RR
-            -0.00571868, 0.608813, -1.21763     # RL
-        ])
+    # Initial state setup
     q_current = np.zeros(19)
-    q_nom = np.zeros(12)
-    q_nom[0:3] = stand_up_joint_pos[3:6]  # FL
-    q_nom[3:6] = stand_up_joint_pos[0:3]  # FR
-    q_nom[6:9] = stand_up_joint_pos[9:]   # RL
-    q_nom[9:]  = stand_up_joint_pos[6:9]  # RR
-    q_current[7:] = q_nom
+    q_current[3:7] = [0, 0, 0, 1]  # Identity quaternion
+    stand_up_joint_pos = np.array([
+        0.00571868, 0.608813, -1.21763,     # FR
+        -0.00571868, 0.608813, -1.21763,    # FL
+        0.00571868, 0.608813, -1.21763,     # RR
+        -0.00571868, 0.608813, -1.21763     # RL
+    ])
+    q_nom = stand_up_joint_pos
     current_feet = footstep_planner.quadruped.get_foot_positions(q_current)
-    foot_history = {leg: [] for leg in legs}
     
     print("Simulating...")
     for i in range(steps):
         # Update state
         q_current[0:3] = com_pos[i]
-        q_current[3:7] = [0, 0, 0, 1]
         
         # Update gait scheduler
         gait_scheduler.update(dt)
         contact_states[:, i] = gait_scheduler.get_current_contact_state()
         
         # Create reference trajectory for MPC horizon
-        ref_traj = np.zeros((13, mpc_horizon))
-        for j in range(mpc_horizon):
-            if i + j < steps:
-                ref_traj[0:3, j] = com_pos[i + j]  # Position
-                ref_traj[6:9, j] = com_vel[i + j]  # Velocity
-        
+        x_ref = np.zeros((13, mpc_horizon + 1))  # +1 because we need current state too
+        for j in range(mpc_horizon + 1):
+            idx = min(i + j, steps - 1)  # Prevent index out of bounds
+            x_ref[3:6, j] = com_pos[idx]    # Position
+            x_ref[9:12, j] = com_vel[idx]   # Velocity
+            x_ref[12, j] = 9.81             # Gravity
+
         # Get MPC horizon prediction
         horizon_footsteps = footstep_planner.plan_horizon_footsteps(
             dt,
             mpc_horizon,
-            ref_traj,
+            x_ref,
             q_nom,
             q_current,
             gait_scheduler
         )
         horizon_footsteps_history.append(horizon_footsteps)
         
-        # Update foot positions using first step of MPC prediction
+        # Update foot positions
         for leg in range(4):
             if contact_states[leg, i] == 0:  # Swing
                 foot_positions[leg, :, i] = horizon_footsteps[leg*3:(leg+1)*3, 0]
                 current_feet[leg] = horizon_footsteps[leg*3:(leg+1)*3, 0]
             else:  # Stance
                 foot_positions[leg, :, i] = current_feet[leg]
-            foot_history[legs[leg]].append(foot_positions[leg, :, i])
     
-    # Plot results
-    #plot_results(com_pos, foot_positions, contact_states, dt, foot_history)
-    animate_results(com_pos, foot_positions, contact_states, dt, foot_history)
+    # Call animation with stored history
+    animate_results(com_pos, foot_positions, contact_states, dt, horizon_footsteps_history)
 
 def plot_results(com_pos, foot_positions, contact_states, dt, foot_history):
     """Improved visualization of contact schedules and foot positions with a proper legend."""
@@ -163,6 +156,94 @@ def plot_results(com_pos, foot_positions, contact_states, dt, foot_history):
     plt.show()
 
 def animate_results(com_pos, foot_positions, contact_states, dt, horizon_footsteps_history):
+    import matplotlib.animation as animation
+    
+    steps = com_pos.shape[0]
+    legs = ['FL', 'FR', 'RL', 'RR']
+    colors = ['r', 'g', 'b', 'y']
+    
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111)
+    
+    def update(frame):
+        ax.clear()
+        
+        # Plot COM trajectory history
+        ax.plot(com_pos[:frame, 0], com_pos[:frame, 1], 'k-', label='COM History', alpha=0.5)
+        
+        # Plot predicted COM trajectory for horizon
+        horizon_length = 10  # Your MPC horizon length
+        future_indices = range(frame, min(frame + horizon_length, steps))
+        if len(future_indices) > 0:
+            ax.plot(com_pos[future_indices, 0], com_pos[future_indices, 1], 
+                   'k--', label='Predicted COM', alpha=0.5)
+        
+        # Plot foot position history
+        for leg in range(4):
+            # Historical foot positions
+            foot_x = foot_positions[leg, 0, :frame]
+            foot_y = foot_positions[leg, 1, :frame]
+            if frame > 0:
+                ax.plot(foot_x, foot_y, color=colors[leg], alpha=0.3, label=f'{legs[leg]} History')
+            
+            # Current foot position
+            if contact_states[leg, frame] == 1:  # Stance
+                ax.scatter(foot_positions[leg, 0, frame], foot_positions[leg, 1, frame],
+                          c=colors[leg], marker='o', s=100, label=f'{legs[leg]} Stance')
+            else:  # Swing
+                ax.scatter(foot_positions[leg, 0, frame], foot_positions[leg, 1, frame],
+                          c=colors[leg], marker='x', s=100, label=f'{legs[leg]} Swing')
+            
+            # Plot MPC predicted footsteps
+            if frame < len(horizon_footsteps_history):
+                horizon_steps = horizon_footsteps_history[frame]
+                # Plot predicted foot positions for this leg
+                predicted_x = horizon_steps[leg*3, :]
+                predicted_y = horizon_steps[leg*3 + 1, :]
+                ax.plot(predicted_x, predicted_y, color=colors[leg], 
+                       linestyle='--', alpha=0.5)
+                # Mark predicted touchdown positions
+                ax.scatter(predicted_x, predicted_y, color=colors[leg], 
+                         marker='.', alpha=0.3, s=50)
+        
+        # Draw support polygon for stance feet
+        stance_feet = []
+        for leg in range(4):
+            if contact_states[leg, frame] == 1:
+                stance_feet.append([foot_positions[leg, 0, frame], 
+                                 foot_positions[leg, 1, frame]])
+        if len(stance_feet) >= 3:  # Need at least 3 points for a polygon
+            stance_feet = np.array(stance_feet)
+            from scipy.spatial import ConvexHull
+            hull = ConvexHull(stance_feet)
+            for simplex in hull.simplices:
+                ax.plot(stance_feet[simplex, 0], stance_feet[simplex, 1], 
+                       'k-', alpha=0.3)
+        
+        # Set consistent view
+        ax.set_xlim(com_pos[frame, 0] - 0.8, com_pos[frame, 0] + 0.8)
+        ax.set_ylim(-0.8, 0.8)
+        ax.grid(True)
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.set_title(f'Time: {frame*dt:.2f}s')
+        
+        # Add legend (show only unique entries)
+        handles, labels = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels, handles))
+        ax.legend(by_label.values(), by_label.keys(), 
+                 loc='upper left', bbox_to_anchor=(1.05, 1))
+        
+        # Keep aspect ratio equal
+        ax.set_aspect('equal')
+        
+    ani = animation.FuncAnimation(fig, update, frames=steps, 
+                                interval=50, blit=False)
+    plt.tight_layout()
+    plt.show()
+    
+    # Optionally save animation
+    # ani.save('footstep_planning.gif', writer='pillow')
     import matplotlib.animation as animation
     
     steps = com_pos.shape[0]

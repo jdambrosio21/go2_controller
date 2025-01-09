@@ -173,7 +173,11 @@ class ConvexMPC():
         # over the entire horizon
         for k in range(self.params.horizon_steps): #k-1
             # Get current state elements
-            yaw = self.X[2, k]
+            #yaw = self.X[2, k]
+
+            yaw_ref = self.x_ref[2, :]  # Get yaw row
+            avg_yaw = ca.sum2(yaw_ref) / (self.params.horizon_steps + 1)  # Use sum2 for row vector
+    
 
             # Get  CoM position from optimization variable, not reference
             com_pos = self.X[3:6, k]  # Current state in optimization
@@ -190,7 +194,7 @@ class ConvexMPC():
             # Flatten r_vectors to 12, to match input expected by get_discretized_dynamics
             r = ca.vec(r_vectors)
     
-            Ad, Bd = self.get_discretized_dynamics(yaw, r)
+            Ad, Bd = self.get_discretized_dynamics(avg_yaw, r)
 
             X_next = Ad @ self.X[:, k] + Bd @ self.U[:, k]
 
